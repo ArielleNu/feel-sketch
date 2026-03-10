@@ -6,6 +6,11 @@
 
 body {
   margin: 0;
-  background: radial-gradient(ellipse 120% 80% at 50% 0%, rgba(255,248,240,0.95) 0%, transparent 50%), radial-gradient(ellipse 100% 100% at 80% 80%, rgba(255,235,220,0.9) 0%, transparent 45%), linear-gradient(160deg, #fff5eb 0%, #ffe8d6 25%, #ffdfc8 50%, #f5d4c4 70%, #e8c8b8 100%);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(204, 219, 232, 0.78) 0, rgba(204, 219, 232, 0.42) 18%, transparent 38%),
+    radial-gradient(circle at 86% 14%, rgba(255, 210, 213, 0.74) 0, rgba(255, 210, 213, 0.40) 18%, transparent 40%),
+    radial-gradient(circle at 18% 84%, rgba(214, 226, 196, 0.76) 0, rgba(214, 226, 196, 0.42) 20%, transparent 42%),
+    radial-gradient(circle at 82% 82%, rgba(255, 223, 186, 0.72) 0, rgba(255, 223, 186, 0.38) 20%, transparent 42%),
+    linear-gradient(180deg, #fdfdfd 0%, #f9f7f4 45%, #f3efe9 100%);
 }
 

@@ -7,6 +7,48 @@ interface Message {
   content: string;
 }
 
+const PaintMark: React.FC = () => (
+  <svg
+    width="46"
+    height="46"
+    viewBox="0 0 46 46"
+    fill="none"
+    aria-hidden="true"
+    style={{ flex: "0 0 auto" }}
+  >
+    <defs>
+      <radialGradient id="blob" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(18 16) rotate(38) scale(30 26)">
+        <stop stopColor="#ffd2d5" stopOpacity="0.95" />
+        <stop offset="0.55" stopColor="#d6e2c4" stopOpacity="0.75" />
+        <stop offset="1" stopColor="#ccdbe8" stopOpacity="0.65" />
+      </radialGradient>
+      <linearGradient id="stroke" x1="7" y1="32" x2="40" y2="18" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#8b6914" stopOpacity="0.85" />
+        <stop offset="1" stopColor="#b8956e" stopOpacity="0.85" />
+      </linearGradient>
+    </defs>
+
+    <path
+      d="M30.7 8.7c4.5 1.9 6.8 6.8 5.7 11.4c-0.8 3.2 0 6.3-1.4 9.1c-1.8 3.5-5.7 6.2-9.9 6.5c-4.6 0.3-9.7-1.1-12-5.2c-1.9-3.4 0.4-6.5-0.7-10.2c-1.2-4.2-2.3-8.5 1.1-11.7c3.1-2.9 7.7-2.2 11.5-1.7c2 0.2 4.0 0.2 5.7 1.0Z"
+      fill="url(#blob)"
+    />
+    <path
+      d="M10.2 31.5c8.4-2.7 16.4-3.1 25.5-6.8"
+      stroke="url(#stroke)"
+      strokeWidth="4.5"
+      strokeLinecap="round"
+      opacity="0.9"
+    />
+    <path
+      d="M8.6 28.8c6.5-1.9 13.1-2.6 20.0-4.6"
+      stroke="url(#stroke)"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      opacity="0.35"
+    />
+  </svg>
+);
+
 const INTAKE_PROMPT = `You are an encouraging AI creative partner helping NOVICE programmers turn personal memories and feelings into animated p5.js sketches.
 
 RIGHT NOW your only job is the intake conversation — do NOT generate any code yet.
@@ -394,7 +436,8 @@ ${lastCode}
     <div
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(255,248,240,0.95) 0%, transparent 50%), radial-gradient(ellipse 100% 100% at 80% 80%, rgba(255,235,220,0.9) 0%, transparent 45%), linear-gradient(160deg, #fff5eb 0%, #ffe8d6 25%, #ffdfc8 50%, #f5d4c4 70%, #e8c8b8 100%)",
+        background:
+          "radial-gradient(circle at 12% 18%, rgba(204, 219, 232, 0.78) 0, rgba(204, 219, 232, 0.42) 18%, transparent 38%), radial-gradient(circle at 86% 14%, rgba(255, 210, 213, 0.74) 0, rgba(255, 210, 213, 0.40) 18%, transparent 40%), radial-gradient(circle at 18% 84%, rgba(214, 226, 196, 0.76) 0, rgba(214, 226, 196, 0.42) 20%, transparent 42%), radial-gradient(circle at 82% 82%, rgba(255, 223, 186, 0.72) 0, rgba(255, 223, 186, 0.38) 20%, transparent 42%), linear-gradient(180deg, #fdfdfd 0%, #f9f7f4 45%, #f3efe9 100%)",
         color: "#2c2c2c",
         fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
         display: "flex",
@@ -413,10 +456,10 @@ ${lastCode}
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
-          background: "linear-gradient(165deg, rgba(255,245,235,0.92) 0%, rgba(248,232,218,0.95) 40%, rgba(235,218,205,0.98) 100%)",
+          background: "transparent",
           borderRadius: 16,
-          border: "1px solid rgba(200,180,165,0.4)",
-          boxShadow: "0 20px 50px rgba(180,140,120,0.15), 0 0 0 1px rgba(255,255,255,0.5) inset",
+          border: "none",
+          boxShadow: "none",
           padding: 24,
           boxSizing: "border-box",
           flex: 1,
@@ -426,18 +469,46 @@ ${lastCode}
           gap: 24,
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
-          <h1
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            minWidth: 0,
+            minHeight: 0,
+            overflow: "hidden",
+            padding: 16,
+            borderRadius: 16,
+            background: "rgba(255, 255, 255, 0.55)",
+            border: "1px solid rgba(140, 120, 100, 0.18)",
+            boxShadow:
+              "0 18px 40px rgba(180, 140, 120, 0.14), 0 0 0 1px rgba(255,255,255,0.45) inset",
+            backdropFilter: "blur(10px)",
+            WebkitBackdropFilter: "blur(10px)",
+          }}
+        >
+          <div
             style={{
-              margin: "0 0 16px",
-              fontSize: 28,
-              fontWeight: 700,
-              color: "#4a4038",
-              letterSpacing: "-0.02em",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              marginBottom: 16,
             }}
           >
-            Feel Sketch
-          </h1>
+            <PaintMark />
+            <h1
+              style={{
+                margin: 0,
+                fontSize: 34,
+                fontWeight: 700,
+                color: "#3d342c",
+                letterSpacing: "-0.03em",
+                fontFamily:
+                  "\"Fraunces\", ui-serif, Georgia, Cambria, \"Times New Roman\", Times, serif",
+              }}
+            >
+              Feel Sketch
+            </h1>
+          </div>
 
           <div
             style={{
@@ -625,7 +696,21 @@ ${lastCode}
           </div>
         </div>
 
-        <div style={{ minWidth: 0, minHeight: 0, overflow: "auto" }}>
+        <div
+          style={{
+            minWidth: 0,
+            minHeight: 0,
+            overflow: "auto",
+            padding: 16,
+            borderRadius: 16,
+            background: "rgba(255, 255, 255, 0.55)",
+            border: "1px solid rgba(140, 120, 100, 0.18)",
+            boxShadow:
+              "0 18px 40px rgba(180, 140, 120, 0.14), 0 0 0 1px rgba(255,255,255,0.45) inset",
+            backdropFilter: "blur(10px)",
+            WebkitBackdropFilter: "blur(10px)",
+          }}
+        >
           <div
             style={{
               border: "2px solid rgba(180,155,140,0.4)",
