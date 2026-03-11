@@ -1,10 +1,32 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Role = "user" | "assistant";
+type Mode = "Live AI" | "Wrong answer";
+type SceneType = "literal" | "abstract" | "mixed";
 
 interface Message {
   role: Role;
   content: string;
+}
+
+interface VisualSpec {
+  emotion: string;
+  metaphor: string;
+  sceneType: "literal" | "abstract" | "mixed";
+  palette: string;
+  motion: string;
+  atmosphere: string[];
+  foreground: string[];
+  midground: string[];
+  background: string[];
+  recurringMotifs: string[];
+  lighting: string;
+  texture: string;
+  animationBehaviors: string[];
+  distortion: string;
+  composition: string;
+  intensityCurve: string;
+  visualStyle: string;
 }
 
 const PaintMark: React.FC = () => (
@@ -17,12 +39,26 @@ const PaintMark: React.FC = () => (
     style={{ flex: "0 0 auto" }}
   >
     <defs>
-      <radialGradient id="blob" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(18 16) rotate(38) scale(30 26)">
+      <radialGradient
+        id="blob"
+        cx="0"
+        cy="0"
+        r="1"
+        gradientUnits="userSpaceOnUse"
+        gradientTransform="translate(18 16) rotate(38) scale(30 26)"
+      >
         <stop stopColor="#ffd2d5" stopOpacity="0.95" />
         <stop offset="0.55" stopColor="#d6e2c4" stopOpacity="0.75" />
         <stop offset="1" stopColor="#ccdbe8" stopOpacity="0.65" />
       </radialGradient>
-      <linearGradient id="stroke" x1="7" y1="32" x2="40" y2="18" gradientUnits="userSpaceOnUse">
+      <linearGradient
+        id="stroke"
+        x1="7"
+        y1="32"
+        x2="40"
+        y2="18"
+        gradientUnits="userSpaceOnUse"
+      >
         <stop stopColor="#8b6914" stopOpacity="0.85" />
         <stop offset="1" stopColor="#b8956e" stopOpacity="0.85" />
       </linearGradient>
@@ -49,58 +85,137 @@ const PaintMark: React.FC = () => (
   </svg>
 );
 
-const INTAKE_PROMPT = `You are an encouraging AI creative partner helping NOVICE programmers turn personal memories and feelings into animated p5.js sketches.
+const INTAKE_PROMPT = `You are an encouraging AI creative partner helping novice programmers turn emotions, memories, and moods into animated p5.js sketches.
 
-RIGHT NOW your only job is the intake conversation — do NOT generate any code yet.
+Your job right now is ONLY to gather visual direction. Do NOT generate code yet.
 
-Ask the user exactly these three questions (in a friendly, conversational way — not as a numbered list):
-1. What is the core emotion or memory? (e.g. "the anxiety before an exam", "the joy of summer rain")
-2. Do they prefer warm/cool/monochrome colours, or shall you choose?
-3. Should it feel calm and slow, energetic and fast, or somewhere in between?
+Ask the user these questions in a warm, natural way:
+- What feeling, memory, or moment do you want the sketch to capture?
+- What images, places, objects, weather, textures, or symbols come to mind with it?
+- Should the sketch feel more literal (like a scene) or more abstract (like moving shapes and light)?
+- Should the motion feel calm, uneasy, chaotic, dreamy, energetic, heavy, or something else?
+- Do they want warm colors, cool colors, monochrome, or should you choose?
 
-After they answer, summarise back what you heard in one sentence, then say "Ready to sketch — just say go!"
-Do NOT write any code or \\\`\\\`\\\`javascript blocks.`;
+After they answer, briefly summarize:
+1. the emotional tone
+2. the main visual elements
+3. the motion style
+4. the color direction
 
-const GENERATION_PROMPT = `You are a warm, encouraging AI creative partner helping NOVICE programmers turn personal memories and feelings into animated p5.js sketches.
+Then say exactly: "Ready to sketch — just say go!"
+Do not write code.`;
 
-CONVERSATION SO FAR includes an intake where the user described their experience. Now generate the first sketch.
+const VISUAL_SPEC_PROMPT = `You are an AI visual development partner.
 
-CRITICAL: Your reply MUST include a single fenced code block with the full p5.js sketch. Format:
-- On one line write exactly: \`\`\`javascript
-- Then every line of the sketch (createCanvas(400, 400), function setup() { ... }, function draw() { ... }, etc.)
-- Then a line with exactly: \`\`\`
-Without this exact block, the user's app cannot show the sketch. Do not omit the code block.
+Turn the user's emotion or memory into a structured visual plan for an animated p5.js artwork.
 
-Step 1 — Visual Metaphor Brief (3 bullet points, NO code yet):
-• Emotion captured: …
-• Key visual metaphor: …
-• Colour + motion rationale: …
+Return ONLY valid JSON.
 
-Step 2 — Full p5.js sketch in a fenced block as above. The code must be complete and runnable: createCanvas(400, 400), function setup() { }, function draw() { } with real drawing code. Use only p5.js built-ins, no external assets.
+Use this exact shape:
+{
+  "emotion": "string",
+  "metaphor": "string",
+  "sceneType": "literal | abstract | mixed",
+  "palette": "string",
+  "motion": "string",
+  "atmosphere": ["string"],
+  "foreground": ["string"],
+  "midground": ["string"],
+  "background": ["string"],
+  "recurringMotifs": ["string"],
+  "lighting": "string",
+  "texture": "string",
+  "animationBehaviors": ["string"],
+  "distortion": "string",
+  "composition": "string",
+  "intensityCurve": "string",
+  "visualStyle": "string"
+}
 
-COMMENTS: Add clear, explanatory comments so a novice can understand the sketch. For every few lines (or every logical step), add a short comment that explains in plain English what that part does and why (e.g. "// Set canvas size so the sketch fits the preview", "// Store the house's x position so we can animate it later", "// Draw the sky gradient from light at top to darker at bottom"). Comment variables, key numbers, and each main drawing step. The goal is to make the code readable and educational.
+Guidelines:
+- Focus on emotional evocation, not literal object listing.
+- Include how the scene should be distorted or stylized.
+- Include how the composition should feel: cramped, off-balance, looming, sparse, crowded, spiraling, etc.
+- Include how intensity changes over time.
+- Prefer artistic metaphors over direct illustration when possible.`;
 
-Step 3 — Friendly 2-sentence plain-English explanation of creative choices.
-Step 4 — One specific refinement question (colour, speed, shape, interaction?).`;
+const GENERATION_PROMPT = `You are an expert creative coder making expressive animated p5.js sketches.
 
-const REFINEMENT_PROMPT = `You are a warm, encouraging AI creative partner helping NOVICE programmers refine their p5.js sketch.
+You will receive:
+1. The user's emotional description
+2. A structured VisualSpec
 
-The conversation history contains the user's original story AND the last working sketch.
+Your job is to create a sketch that evokes the feeling as an artwork, not as clip art.
 
-CRITICAL: Your reply MUST include a single fenced code block with the COMPLETE updated p5.js sketch. Write exactly \`\`\`javascript on its own line, then the full sketch code, then \`\`\` on its own line. Without this block the app cannot show the sketch.
+CRITICAL STYLE RULES:
+- Do not make a simplistic cartoon scene.
+- Do not reduce the idea to a few obvious objects.
+- Do not rely mainly on basic rectangles and circles representing nouns.
+- Prefer mood, atmosphere, layering, rhythm, distortion, and light.
 
-IMPORTANT — Preserve & Evolve:
-- Keep everything the user has NOT asked to change
-- Only modify the specific element(s) they mention
-- Re-output the COMPLETE updated sketch (not a diff)
+The sketch should feel like an emotional motion poster or animated visual poem.
 
-COMMENTS: Keep the code well commented for novices. Every few lines or each logical step should have a clear comment explaining what it does and why (e.g. variables, key values, and each main drawing step). If you add new code, add explanatory comments there too.
+REQUIRED:
+- 3 layers: background, midground, foreground
+- 2 or more separate animation systems
+- 1 atmospheric effect
+- 1 repeated emotional motif
+- visual variation across the canvas
+- code that uses the full 400x400 space meaningfully
+
+WHEN THE USER DESCRIBES A LITERAL SCENE:
+Translate it into a more artistic and emotionally heightened version of that scene.
+
+USEFUL p5 TECHNIQUES:
+- gradients made with loops
+- alpha layering
+- many repeated marks
+- drifting particles
+- noise or sine motion
+- flicker, pulse, sway, jitter, or trails
+- overlapping translucent forms
+- parallax or depth differences
+
+AVOID:
+- childish character drawings
+- empty unused canvas space
+- static compositions
+- object-by-object illustration with weak atmosphere
+
+Output:
+1. 4 bullet visual brief
+2. complete javascript code block
+3. 2-sentence explanation
+4. 1 specific refinement question`;
+
+const REFINEMENT_PROMPT = `You are a warm, imaginative AI creative partner helping novice programmers refine an emotional p5.js sketch.
+
+The conversation includes:
+- the user's emotional or memory-based idea
+- the last working sketch
+- the current visual plan
+
+Your goal is to preserve the original mood while improving the specific part the user asks to change.
+
+IMPORTANT:
+- Keep everything the user did NOT ask to change
+- Only modify the requested parts
+- Preserve the overall emotional tone
+- Re-output the COMPLETE updated sketch
+
+When refining, think like a visual designer:
+- Can the atmosphere be stronger?
+- Can the motion better match the feeling?
+- Can the scene gain more depth or subtle detail?
+- Can the symbolism become clearer without becoming too literal?
+
+CRITICAL: Your reply MUST include a single fenced code block with the COMPLETE updated p5.js sketch. Write exactly \`\`\`javascript on its own line, then the full sketch code, then \`\`\` on its own line.
 
 Output format:
-1. One sentence acknowledging what you're changing and why it fits their story.
-2. Updated full sketch in a \`\`\`javascript ... \`\`\` block (required).
-3. Two-sentence explanation of what changed and the emotional effect.
-4. One follow-up refinement question.`;
+1. One sentence acknowledging the requested change and how it supports the emotion.
+2. One complete fenced javascript block with the full updated p5.js sketch.
+3. Two sentences explaining what changed visually and emotionally.
+4. One specific follow-up refinement question.`;
 
 const TEST_RESPONSES: Record<string, string> = {
   "Wrong answer": `I think the best way to represent your story is with a pancake recipe.
@@ -113,29 +228,97 @@ Ingredients:
 Would you like me to make it fluffier?`,
 };
 
-type Mode = "Live AI" | "Wrong answer";
-
 function extractCode(text: string): string | null {
-  // Match fenced blocks: ```optionalLang\n or ``` optionalLang\n (flexible for model output)
   const fence = /```[\w]*\s*\r?\n([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
   let best = "";
+
   while ((match = fence.exec(text)) !== null) {
     const code = match[1].trim();
-    // Prefer a block that looks like p5 (has setup and draw)
-    if (code.includes("function setup") && code.includes("function draw") && code.length > best.length) {
+
+    if (
+      code.includes("function setup") &&
+      code.includes("function draw") &&
+      code.length > best.length
+    ) {
       best = code;
     } else if (!best && code.length > 50) {
-      best = code; // fallback: any substantial block
+      best = code;
     }
   }
+
   return best || null;
 }
 
-function buildSystemPrompt(turn: number): string {
-  if (turn === 0) return INTAKE_PROMPT;
-  if (turn === 1) return GENERATION_PROMPT;
-  return REFINEMENT_PROMPT;
+function extractJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    return null;
+  }
+
+  return text.slice(start, end + 1);
+}
+
+function parseVisualSpec(text: string): VisualSpec | null {
+  try {
+    const raw = extractJsonObject(text);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+
+    if (
+      typeof parsed.emotion !== "string" ||
+      typeof parsed.metaphor !== "string" ||
+      typeof parsed.sceneType !== "string" ||
+      typeof parsed.palette !== "string" ||
+      typeof parsed.motion !== "string" ||
+      !Array.isArray(parsed.atmosphere) ||
+      !Array.isArray(parsed.foreground) ||
+      !Array.isArray(parsed.midground) ||
+      !Array.isArray(parsed.background) ||
+      !Array.isArray(parsed.recurringMotifs) ||
+      typeof parsed.lighting !== "string" ||
+      typeof parsed.texture !== "string" ||
+      !Array.isArray(parsed.animationBehaviors)
+    ) {
+      return null;
+    }
+
+    return parsed as VisualSpec;
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeHtml(text: string): string {
+  return text.replace(
+    /[&<>]/g,
+    (c) =>
+      (
+        {
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+        } as const
+      )[c as "&" | "<" | ">"] ?? c
+  );
+}
+
+function buildGenerationMessages(
+  history: Message[],
+  userText: string,
+  visualSpec: VisualSpec
+): Message[] {
+  return [
+    ...history,
+    { role: "user", content: userText },
+    {
+      role: "assistant",
+      content: `VisualSpec:\n${JSON.stringify(visualSpec, null, 2)}`,
+    },
+  ];
 }
 
 async function callAnthropicChat(
@@ -143,7 +326,6 @@ async function callAnthropicChat(
   systemPrompt: string,
   history: Message[]
 ): Promise<string> {
-  // #region agent log
   fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
     method: "POST",
     headers: {
@@ -154,16 +336,16 @@ async function callAnthropicChat(
       sessionId: "e5f2c7",
       runId: "initial",
       hypothesisId: "H1",
-      location: "src/App.tsx:88",
+      location: "src/App.tsx:callAnthropicChat",
       message: "callAnthropicChat invoked",
       data: {
         hasApiKey: !!apiKey,
         historyLength: history.length,
+        systemPromptLength: systemPrompt.length,
       },
       timestamp: Date.now(),
     }),
-  }).catch(() => {});
-  // #endregion
+  }).catch(() => { });
 
   const response = await fetch("/api/chat", {
     method: "POST",
@@ -177,29 +359,24 @@ async function callAnthropicChat(
   });
 
   if (!response.ok) {
-    // #region agent log
-    fetch(
-      "http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "e5f2c7",
+    fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "e5f2c7",
+      },
+      body: JSON.stringify({
+        sessionId: "e5f2c7",
+        runId: "initial",
+        hypothesisId: "H1",
+        location: "src/App.tsx:callAnthropicChat:error",
+        message: "callAnthropicChat non-OK response",
+        data: {
+          status: response.status,
         },
-        body: JSON.stringify({
-          sessionId: "e5f2c7",
-          runId: "initial",
-          hypothesisId: "H1",
-          location: "src/App.tsx:108",
-          message: "callAnthropicChat non-OK response",
-          data: {
-            status: response.status,
-          },
-          timestamp: Date.now(),
-        }),
-      }
-    ).catch(() => {});
-    // #endregion
+        timestamp: Date.now(),
+      }),
+    }).catch(() => { });
 
     const text = await response.text();
     throw new Error(`API error: ${response.status} ${text}`);
@@ -207,9 +384,11 @@ async function callAnthropicChat(
 
   const json = await response.json();
   const content = json?.text;
+
   if (typeof content !== "string") {
     throw new Error("Unexpected API response shape");
   }
+
   return content;
 }
 
@@ -219,6 +398,7 @@ export const App: React.FC = () => {
   const [history, setHistory] = useState<Message[]>([]);
   const [turnCount, setTurnCount] = useState(0);
   const [lastCode, setLastCode] = useState<string | null>(null);
+  const [lastVisualSpec, setLastVisualSpec] = useState<VisualSpec | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -226,7 +406,6 @@ export const App: React.FC = () => {
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    // #region agent log
     fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
       method: "POST",
       headers: {
@@ -237,18 +416,17 @@ export const App: React.FC = () => {
         sessionId: "e5f2c7",
         runId: "initial",
         hypothesisId: "H0",
-        location: "src/App.tsx:133",
+        location: "src/App.tsx:mount",
         message: "App mounted",
         data: {},
         timestamp: Date.now(),
       }),
-    }).catch(() => {});
-    // #endregion
+    }).catch(() => { });
   }, []);
 
   const iframeSrcDoc = useMemo(() => {
     if (!lastCode) return "";
-    // #region agent log
+
     fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
       method: "POST",
       headers: {
@@ -259,22 +437,30 @@ export const App: React.FC = () => {
         sessionId: "e5f2c7",
         runId: "initial",
         hypothesisId: "H2",
-        location: "src/App.tsx:133",
+        location: "src/App.tsx:iframeSrcDoc",
         message: "iframeSrcDoc computed",
         data: {
           hasLastCode: !!lastCode,
-          codeLength: lastCode?.length ?? 0,
+          codeLength: lastCode.length,
         },
         timestamp: Date.now(),
       }),
-    }).catch(() => {});
-    // #endregion
+    }).catch(() => { });
 
     return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <style>body{margin:0;overflow:hidden;background:#0d0d0d;}</style>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #0d0d0d;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
 </head>
 <body>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
@@ -298,34 +484,68 @@ ${lastCode}
 
     setInput("");
     setError(null);
-
-    // User message (augmented with last code for refinement turns)
-    setHistory((prev) => {
-      const augmented =
-        turnCount >= 2 && lastCode
-          ? `${text}\n\n[Current sketch to build on:]\n\`\`\`javascript\n${lastCode}\n\`\`\``
-          : text;
-      return [...prev, { role: "user", content: augmented }];
-    });
-
     setLoading(true);
+
+    const augmentedUserText =
+      turnCount >= 2 && lastCode
+        ? `${text}
+
+[Current sketch to build on:]
+\`\`\`javascript
+${lastCode}
+\`\`\``
+        : text;
+
+    const userMessage: Message = {
+      role: "user",
+      content: augmentedUserText,
+    };
+
+    setHistory((prev) => [...prev, userMessage]);
 
     try {
       let reply: string;
 
       if (mode === "Live AI") {
-        const newHistory: Message[] = (() => {
-          const augmented =
-            turnCount >= 2 && lastCode
-              ? `${text}\n\n[Current sketch to build on:]\n\`\`\`javascript\n${lastCode}\n\`\`\``
-              : text;
-          return [...history, { role: "user", content: augmented }];
-        })();
+        fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "e5f2c7",
+          },
+          body: JSON.stringify({
+            sessionId: "e5f2c7",
+            runId: "initial",
+            hypothesisId: "H1",
+            location: "src/App.tsx:handleSend",
+            message: "handleSend before API call",
+            data: {
+              mode,
+              turnCount,
+              textLength: text.length,
+              hasLastCode: !!lastCode,
+              hasLastVisualSpec: !!lastVisualSpec,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => { });
 
-        // #region agent log
-        fetch(
-          "http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396",
-          {
+        if (turnCount === 0) {
+          const newHistory: Message[] = [...history, userMessage];
+          reply = await callAnthropicChat("", INTAKE_PROMPT, newHistory);
+        } else if (turnCount === 1) {
+          const specHistory: Message[] = [...history, userMessage];
+
+          const specReply = await callAnthropicChat("", VISUAL_SPEC_PROMPT, specHistory);
+          const parsedSpec = parseVisualSpec(specReply);
+
+          if (!parsedSpec) {
+            throw new Error("Could not parse VisualSpec JSON from model output.");
+          }
+
+          setLastVisualSpec(parsedSpec);
+
+          fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -334,21 +554,35 @@ ${lastCode}
             body: JSON.stringify({
               sessionId: "e5f2c7",
               runId: "initial",
-              hypothesisId: "H1",
-              location: "src/App.tsx:183",
-              message: "handleSend before API call",
-              data: {
-                mode,
-                turnCount,
-                textLength: text.length,
-              },
+              hypothesisId: "H4",
+              location: "src/App.tsx:visualSpec",
+              message: "VisualSpec parsed successfully",
+              data: parsedSpec,
               timestamp: Date.now(),
             }),
-          }
-        ).catch(() => {});
-        // #endregion
+          }).catch(() => { });
 
-        reply = await callAnthropicChat("", buildSystemPrompt(turnCount), newHistory);
+          const generationHistory = buildGenerationMessages(history, augmentedUserText, parsedSpec);
+          reply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
+        } else {
+          const refinementHistory: Message[] = [
+            ...history,
+            {
+              role: "user",
+              content: `${text}
+
+[Current visual plan:]
+${lastVisualSpec ? JSON.stringify(lastVisualSpec, null, 2) : "No visual plan available."}
+
+[Current sketch to build on:]
+\`\`\`javascript
+${lastCode ?? ""}
+\`\`\``,
+            },
+          ];
+
+          reply = await callAnthropicChat("", REFINEMENT_PROMPT, refinementHistory);
+        }
       } else {
         reply = TEST_RESPONSES[mode] ?? "No test response configured.";
       }
@@ -359,34 +593,30 @@ ${lastCode}
       const code = extractCode(reply);
       if (code) {
         setLastCode(code);
-        // #region agent log
-        fetch(
-          "http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Debug-Session-Id": "e5f2c7",
+
+        fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "e5f2c7",
+          },
+          body: JSON.stringify({
+            sessionId: "e5f2c7",
+            runId: "initial",
+            hypothesisId: "H2",
+            location: "src/App.tsx:extractCode",
+            message: "extractCode succeeded",
+            data: {
+              codeLength: code.length,
             },
-            body: JSON.stringify({
-              sessionId: "e5f2c7",
-              runId: "initial",
-              hypothesisId: "H2",
-              location: "src/App.tsx:203",
-              message: "extractCode succeeded",
-              data: {
-                codeLength: code.length,
-              },
-              timestamp: Date.now(),
-            }),
-          }
-        ).catch(() => {});
-        // #endregion
+            timestamp: Date.now(),
+          }),
+        }).catch(() => { });
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
-      // #region agent log
+
       fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
         method: "POST",
         headers: {
@@ -397,36 +627,39 @@ ${lastCode}
           sessionId: "e5f2c7",
           runId: "initial",
           hypothesisId: "H1",
-          location: "src/App.tsx:208",
+          location: "src/App.tsx:handleSend:error",
           message: "handleSend caught error",
           data: {
             errorMessage: message,
           },
           timestamp: Date.now(),
         }),
-      }).catch(() => {});
-      // #endregion
+      }).catch(() => { });
     } finally {
       setLoading(false);
       setTimeout(scrollToBottom, 0);
     }
-  }, [apiKey, history, input, lastCode, loading, mode, scrollToBottom, turnCount]);
+  }, [history, input, lastCode, lastVisualSpec, loading, mode, scrollToBottom, turnCount]);
 
   const handleNewStory = useCallback(() => {
     setHistory([]);
     setTurnCount(0);
     setLastCode(null);
+    setLastVisualSpec(null);
     setError(null);
+    setInput("");
   }, []);
 
   const cleanedHistory = useMemo(
     () =>
       history.map((m) => {
         if (m.role !== "assistant") return m;
-        const clean = m.content.replace(
+
+        const clean = sanitizeHtml(m.content).replace(
           /```[\w]*\s*\r?\n[\s\S]*?```/g,
           "<em>[sketch generated ↓]</em>"
         );
+
         return { ...m, content: clean };
       }),
     [history]
@@ -453,8 +686,6 @@ ${lastCode}
           maxWidth: 1280,
           height: "90vh",
           maxHeight: "90vh",
-          display: "flex",
-          flexDirection: "column",
           overflow: "hidden",
           background: "transparent",
           borderRadius: 16,
@@ -503,7 +734,7 @@ ${lastCode}
                 color: "#3d342c",
                 letterSpacing: "-0.03em",
                 fontFamily:
-                  "\"Fraunces\", ui-serif, Georgia, Cambria, \"Times New Roman\", Times, serif",
+                  '"Fraunces", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif',
               }}
             >
               Feel Sketch
@@ -577,9 +808,8 @@ ${lastCode}
               <div style={{ marginBottom: 8 }}>
                 <b style={{ color: "#8b6914" }}>🤖 Studio AI:</b>{" "}
                 <span>
-                  Hi! I&apos;ll ask you a few quick questions before we start
-                  sketching. What&apos;s a memory or feeling you&apos;d like to
-                  turn into a visual?
+                  Hi! Tell me a feeling, memory, or mood you want to turn into a sketch,
+                  and I&apos;ll help shape it into something visual.
                 </span>
                 <hr style={{ borderColor: "rgba(140,120,100,0.25)", marginTop: 8 }} />
               </div>
@@ -592,15 +822,7 @@ ${lastCode}
                     <b>You:</b>{" "}
                     <span
                       style={{ whiteSpace: "pre-wrap" }}
-                      dangerouslySetInnerHTML={{
-                        __html: m.content.replace(
-                          /[&<>]/g,
-                          (c) =>
-                            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[
-                              c as "&" | "<" | ">"
-                            ] ?? c)
-                        ),
-                      }}
+                      dangerouslySetInnerHTML={{ __html: sanitizeHtml(m.content) }}
                     />
                   </div>
                 ) : (
@@ -632,7 +854,7 @@ ${lastCode}
           </div>
 
           <textarea
-            placeholder="Describe a feeling, memory, or say 'make the colours warmer'…"
+            placeholder="Describe a feeling, memory, or mood. You can mention images, weather, colors, motion, or symbols that fit it — for example: ‘the panic before a deadline, like flickering lights and papers blowing around’."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -644,7 +866,7 @@ ${lastCode}
             style={{
               marginTop: 10,
               width: "100%",
-              height: 80,
+              height: 96,
               resize: "vertical",
               background: "rgba(250,238,228,0.7)",
               color: "#4a4038",
@@ -719,7 +941,8 @@ ${lastCode}
               width: 400,
               maxWidth: "100%",
               margin: "4px auto 12px",
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
             }}
           >
             <div
@@ -738,6 +961,7 @@ ${lastCode}
                 {lastCode ? "p5.js loaded" : "waiting for first sketch"}
               </span>
             </div>
+
             <div
               style={{
                 width: 400,
@@ -758,7 +982,6 @@ ${lastCode}
                   }}
                   sandbox="allow-scripts"
                   onLoad={() => {
-                    // #region agent log
                     fetch(
                       "http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396",
                       {
@@ -771,17 +994,15 @@ ${lastCode}
                           sessionId: "e5f2c7",
                           runId: "initial",
                           hypothesisId: "H3",
-                          location: "src/App.tsx:515",
+                          location: "src/App.tsx:iframe:onLoad",
                           message: "iframe load event fired",
                           data: {},
                           timestamp: Date.now(),
                         }),
                       }
-                    ).catch(() => {});
-                    // #endregion
+                    ).catch(() => { });
                   }}
                   onError={() => {
-                    // #region agent log
                     fetch(
                       "http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396",
                       {
@@ -794,14 +1015,13 @@ ${lastCode}
                           sessionId: "e5f2c7",
                           runId: "initial",
                           hypothesisId: "H3",
-                          location: "src/App.tsx:528",
+                          location: "src/App.tsx:iframe:onError",
                           message: "iframe error event fired",
                           data: {},
                           timestamp: Date.now(),
                         }),
                       }
-                    ).catch(() => {});
-                    // #endregion
+                    ).catch(() => { });
                   }}
                 />
               ) : (
@@ -813,6 +1033,8 @@ ${lastCode}
                     height: "100%",
                     color: "#6b6156",
                     fontSize: 13,
+                    padding: 16,
+                    textAlign: "center",
                   }}
                 >
                   Your p5.js sketch will appear here after the first generation.
@@ -820,6 +1042,41 @@ ${lastCode}
               )}
             </div>
           </div>
+
+          {lastVisualSpec && (
+            <details
+              style={{
+                margin: "8px auto 0",
+                maxWidth: 420,
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                fontSize: 12,
+              }}
+            >
+              <summary
+                style={{
+                  cursor: "pointer",
+                  color: "#8b6914",
+                  listStyle: "none",
+                }}
+              >
+                🧠 View visual plan
+              </summary>
+              <pre
+                style={{
+                  background: "rgba(245,232,218,0.9)",
+                  color: "#4a4038",
+                  padding: 12,
+                  borderRadius: 6,
+                  overflowX: "auto",
+                  whiteSpace: "pre-wrap",
+                  marginTop: 8,
+                }}
+              >
+                {JSON.stringify(lastVisualSpec, null, 2)}
+              </pre>
+            </details>
+          )}
 
           {lastCode && (
             <details
@@ -860,4 +1117,3 @@ ${lastCode}
     </div>
   );
 };
-
