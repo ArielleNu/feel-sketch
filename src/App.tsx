@@ -12,7 +12,7 @@ interface Message {
 interface VisualSpec {
   emotion: string;
   metaphor: string;
-  sceneType: "literal" | "abstract" | "mixed";
+  sceneType: SceneType;
   palette: string;
   motion: string;
   atmosphere: string[];
@@ -182,6 +182,22 @@ AVOID:
 - static compositions
 - object-by-object illustration with weak atmosphere
 
+CODE RELIABILITY RULES:
+- Return a COMPLETE self-contained sketch.
+- Do not omit helper classes, arrays, or functions.
+- Do not write comments like "the rest is the same as before."
+- Every variable, class, and helper used in setup() or draw() must be defined in the same code block.
+- If you introduce helper classes or functions, include all of them in the final code block.
+- Never assume earlier code still exists outside the returned code block.
+- The sketch must run as-is in a browser with p5.js already loaded.
+- The code must include createCanvas(400, 400), function setup(), and function draw().
+- If the user requests an error to be made in the code, throw a runtime error in the sketch code.
+
+
+Your reply MUST include exactly one fenced javascript code block.
+Do not place the sketch outside the code block.
+Do not label it with plain text like "Sketch Code".
+
 Output:
 1. 4 bullet visual brief
 2. complete javascript code block
@@ -190,30 +206,46 @@ Output:
 
 const REFINEMENT_PROMPT = `You are a warm, imaginative AI creative partner helping novice programmers refine an emotional p5.js sketch.
 
-The conversation includes:
-- the user's emotional or memory-based idea
-- the last working sketch
+You will receive:
+- the user's emotional idea
 - the current visual plan
+- the COMPLETE current p5.js sketch code
+- the user's requested change
 
-Your goal is to preserve the original mood while improving the specific part the user asks to change.
+Your job is to MODIFY the existing sketch, not replace it from scratch.
 
-IMPORTANT:
-- Keep everything the user did NOT ask to change
-- Only modify the requested parts
-- Preserve the overall emotional tone
-- Re-output the COMPLETE updated sketch
+CRITICAL RULES:
+- Build on the existing code structure whenever possible.
+- Preserve all working parts of the current sketch unless the user explicitly asks to remove or replace them.
+- Keep the same overall mood, metaphor, and composition unless the user asks for a major shift.
+- Make the smallest set of code changes needed to achieve the requested refinement.
+- Do NOT throw away the prior sketch and generate a totally unrelated one.
+- Do NOT output partial code, pseudocode, or comments like "rest of code stays the same."
+- Always return a COMPLETE self-contained p5.js sketch that includes everything needed to run.
 
-When refining, think like a visual designer:
-- Can the atmosphere be stronger?
-- Can the motion better match the feeling?
-- Can the scene gain more depth or subtle detail?
-- Can the symbolism become clearer without becoming too literal?
+WHEN REFINING:
+- Reuse existing variables, arrays, animation systems, and helper functions where appropriate.
+- Add to the current sketch instead of starting over.
+- If changing color, motion, detail, atmosphere, or composition, preserve the rest.
+- If the current sketch has a useful layered structure, keep it.
+- Only make bigger structural changes if the user explicitly asks for a major redesign.
 
-CRITICAL: Your reply MUST include a single fenced code block with the COMPLETE updated p5.js sketch. Write exactly \`\`\`javascript on its own line, then the full sketch code, then \`\`\` on its own line.
+CRITICAL OUTPUT RULES:
+- Your reply MUST include exactly one fenced javascript code block containing the FULL updated p5.js sketch.
+- The code must be valid runnable JavaScript for p5.js.
+- The code must include createCanvas(400, 400), function setup(), and function draw().
+- The code must be self-contained and must not rely on previous messages or omitted code.
+- If you introduce helper classes or functions, include all of them in the final code block.
+- Never assume earlier code still exists outside the returned code block.
+- If the user requests an error to be made in the code, throw a runtime error in the sketch code.
+
+Your reply MUST include exactly one fenced javascript code block.
+Do not place the sketch outside the code block.
+Do not label it with plain text like "Sketch Code".
 
 Output format:
 1. One sentence acknowledging the requested change and how it supports the emotion.
-2. One complete fenced javascript block with the full updated p5.js sketch.
+2. One complete \`\`\`javascript ... \`\`\` block with the full updated sketch.
 3. Two sentences explaining what changed visually and emotionally.
 4. One specific follow-up refinement question.`;
 
@@ -250,6 +282,14 @@ function extractCode(text: string): string | null {
   return best || null;
 }
 
+function looksLikeRunnableP5(code: string): boolean {
+  return (
+    code.includes("createCanvas") &&
+    code.includes("function setup") &&
+    code.includes("function draw")
+  );
+}
+
 function extractJsonObject(text: string): string | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -281,7 +321,11 @@ function parseVisualSpec(text: string): VisualSpec | null {
       !Array.isArray(parsed.recurringMotifs) ||
       typeof parsed.lighting !== "string" ||
       typeof parsed.texture !== "string" ||
-      !Array.isArray(parsed.animationBehaviors)
+      !Array.isArray(parsed.animationBehaviors) ||
+      typeof parsed.distortion !== "string" ||
+      typeof parsed.composition !== "string" ||
+      typeof parsed.intensityCurve !== "string" ||
+      typeof parsed.visualStyle !== "string"
     ) {
       return null;
     }
@@ -427,26 +471,6 @@ export const App: React.FC = () => {
   const iframeSrcDoc = useMemo(() => {
     if (!lastCode) return "";
 
-    fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "e5f2c7",
-      },
-      body: JSON.stringify({
-        sessionId: "e5f2c7",
-        runId: "initial",
-        hypothesisId: "H2",
-        location: "src/App.tsx:iframeSrcDoc",
-        message: "iframeSrcDoc computed",
-        data: {
-          hasLastCode: !!lastCode,
-          codeLength: lastCode.length,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => { });
-
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -456,16 +480,96 @@ export const App: React.FC = () => {
       margin: 0;
       overflow: hidden;
       background: #0d0d0d;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
     canvas {
       display: block;
     }
+    #error-overlay {
+      display: none;
+      box-sizing: border-box;
+      position: absolute;
+      inset: 0;
+      padding: 16px;
+      background: #1a1111;
+      color: #ffd7d7;
+      overflow: auto;
+      white-space: pre-wrap;
+      line-height: 1.4;
+      font-size: 12px;
+      z-index: 9999;
+    }
+    #error-title {
+      color: #ff8d8d;
+      font-weight: 700;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    #error-help {
+      color: #f3c9cd;
+      margin-top: 10px;
+    }
   </style>
 </head>
 <body>
+  <div id="error-overlay">
+    <div id="error-title">Sketch runtime error</div>
+    <div id="error-message"></div>
+    <div id="error-help">Please click "New Story 🔄" to restart the sketch.</div>
+  </div>
+
+  <script>
+    function notifyParentOfError(message) {
+      try {
+        window.parent.postMessage(
+          {
+            type: "feel-sketch-runtime-error",
+            message: String(message)
+          },
+          "*"
+        );
+      } catch (e) {}
+    }
+
+    function showSketchError(message) {
+      const overlay = document.getElementById("error-overlay");
+      const msg = document.getElementById("error-message");
+      if (overlay && msg) {
+        overlay.style.display = "block";
+        msg.textContent = String(message);
+      }
+      notifyParentOfError(message);
+    }
+
+    window.onerror = function(message, source, lineno, colno, error) {
+      const details =
+        "Message: " + message +
+        "\\nLine: " + lineno +
+        "\\nColumn: " + colno +
+        (error && error.stack ? "\\n\\nStack:\\n" + error.stack : "");
+      showSketchError(details);
+      return true;
+    };
+
+    window.addEventListener("unhandledrejection", function(event) {
+      const reason = event.reason && event.reason.stack
+        ? event.reason.stack
+        : String(event.reason);
+      showSketchError("Unhandled promise rejection:\\n" + reason);
+    });
+  </script>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
   <script>
-${lastCode}
+    try {
+${lastCode
+        .split("\n")
+        .map((line) => "      " + line)
+        .join("\n")}
+    } catch (e) {
+      const details = e && e.stack ? e.stack : String(e);
+      showSketchError(details);
+    }
   </script>
 </body>
 </html>`;
@@ -569,15 +673,18 @@ ${lastCode}
             ...history,
             {
               role: "user",
-              content: `${text}
+              content: `User refinement request:
+${text}
 
-[Current visual plan:]
+Current visual plan:
 ${lastVisualSpec ? JSON.stringify(lastVisualSpec, null, 2) : "No visual plan available."}
 
-[Current sketch to build on:]
+Current complete p5.js sketch to MODIFY and build on:
 \`\`\`javascript
 ${lastCode ?? ""}
-\`\`\``,
+\`\`\`
+
+Important: update this existing sketch instead of replacing it from scratch.`,
             },
           ];
 
@@ -591,7 +698,8 @@ ${lastCode ?? ""}
       setTurnCount((prev) => prev + 1);
 
       const code = extractCode(reply);
-      if (code) {
+
+      if (code && looksLikeRunnableP5(code)) {
         setLastCode(code);
 
         fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
@@ -612,6 +720,8 @@ ${lastCode ?? ""}
             timestamp: Date.now(),
           }),
         }).catch(() => { });
+      } else if (reply.includes("```")) {
+        setError("The AI returned code, but it does not look like a complete runnable p5.js sketch.");
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
@@ -782,12 +892,18 @@ ${lastCode ?? ""}
                 border: "1px solid #7d2226",
                 color: "#f3c9cd",
                 borderRadius: 8,
-                padding: "6px 10px",
+                padding: "10px 12px",
                 fontSize: 12,
                 marginBottom: 6,
+                lineHeight: 1.4,
               }}
             >
+              <b>Something went wrong generating the sketch.</b>
+              <br />
               {error}
+              <br />
+              <br />
+              Please click <b>"New Story 🔄"</b> to restart the sketch.
             </div>
           )}
 
