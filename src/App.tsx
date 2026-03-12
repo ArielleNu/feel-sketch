@@ -202,7 +202,10 @@ Output:
 1. 4 bullet visual brief
 2. complete javascript code block
 3. 2-sentence explanation
-4. 1 specific refinement question`;
+4. 1 specific refinement question
+
+First output ONLY the full p5.js sketch code.
+After the code block, include a short explanation and one refinement question.`;
 
 const REFINEMENT_PROMPT = `You are a warm, imaginative AI creative partner helping novice programmers refine an emotional p5.js sketch.
 
@@ -277,6 +280,7 @@ function extractCode(text: string): string | null {
     } else if (!best && code.length > 50) {
       best = code;
     }
+
   }
 
   return best || null;
@@ -696,6 +700,15 @@ Important: update this existing sketch instead of replacing it from scratch.`,
 
       setHistory((prev) => [...prev, { role: "assistant", content: reply }]);
       setTurnCount((prev) => prev + 1);
+      if (
+        reply.includes("```javascript") &&
+        !reply.includes("```", reply.indexOf("```javascript") + 3)
+      ) {
+        setError(
+          "The AI response was cut off before the sketch finished generating. Please try again or click New Story."
+        );
+        return;
+      }
 
       const code = extractCode(reply);
 
