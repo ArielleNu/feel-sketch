@@ -933,6 +933,9 @@ Important: update this existing sketch instead of replacing it from scratch.`,
         showProgress
         scrollToFirstStep
         spotlightPadding={10}
+        locale={{
+          last: "Finish",
+        }}
         styles={{
           options: {
             zIndex: 10000,
