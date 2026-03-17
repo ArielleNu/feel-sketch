@@ -765,7 +765,30 @@ ${lastCode}
 
       if (turnCount === 0) {
         const newHistory: Message[] = [...history, userMessage];
-        reply = await callAnthropicChat("", INTAKE_PROMPT, newHistory);
+
+        // Run intake questions AND spec generation in parallel
+        const [intakeReply, specReply] = await Promise.all([
+          callAnthropicChat("", INTAKE_PROMPT, newHistory),
+          callAnthropicChat("", VISUAL_SPEC_PROMPT, newHistory),
+        ]);
+
+        // Generate the sketch and wait for it to finish before showing chat
+        const parsedSpec = parseVisualSpec(specReply);
+        if (parsedSpec) {
+          setLastVisualSpec(parsedSpec);
+          const generationHistory = buildGenerationMessages(history, text, parsedSpec);
+          try {
+            const codeReply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
+            const code = extractCode(codeReply);
+            if (code && looksLikeRunnableP5(code)) setLastCode(code);
+            else console.warn("Code extracted but failed p5 check:", codeReply.slice(0, 200));
+          } catch (err) {
+            console.error("Sketch generation failed:", err);
+          }
+        }
+
+        // Now add the intake follow-up questions to chat
+        reply = intakeReply;
       } else if (turnCount === 1) {
         const specHistory: Message[] = [...history, userMessage];
 
@@ -1367,6 +1390,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
 
           {lastCode && (
             <details
+              open
               style={{
                 margin: "8px auto 0",
                 maxWidth: 420,
