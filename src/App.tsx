@@ -177,6 +177,9 @@ USEFUL p5 TECHNIQUES:
 - flicker, pulse, sway, jitter, or trails
 - overlapping translucent forms
 - parallax or depth differences
+- p5.Vector fields and flow fields using noise()
+- frameCount-driven intensity curves (easing in/out via sin or lerp over time)
+- blendMode(ADD) or blendMode(MULTIPLY) for atmospheric glow
 
 AVOID:
 - childish character drawings
@@ -206,8 +209,8 @@ Output:
 3. 2-sentence explanation
 4. 1 specific refinement question
 
-First output ONLY the full p5.js sketch code.
-After the code block, include a short explanation and one refinement question.`;
+Your reply must start with the fenced javascript code block, with NO text before it.
+After the code block, add a short 2-sentence explanation and one refinement question.`;
 
 const REFINEMENT_PROMPT = `You are a warm, imaginative AI creative partner helping novice programmers refine an emotional p5.js sketch.
 
@@ -352,10 +355,9 @@ function buildGenerationMessages(
 ): Message[] {
   return [
     ...history,
-    { role: "user", content: userText },
     {
-      role: "assistant",
-      content: `VisualSpec:\n${JSON.stringify(visualSpec, null, 2)}`,
+      role: "user",
+      content: `${userText}\n\nVisualSpec:\n${JSON.stringify(visualSpec, null, 2)}`,
     },
   ];
 }
