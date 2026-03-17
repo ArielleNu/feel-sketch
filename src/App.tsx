@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Joyride, { STATUS, type CallBackProps, type Step } from "react-joyride";
+import sunnyExample from "../assets/happy.png";
+import lonelyExample from "../assets/lonely.png";
 
 type Role = "user" | "assistant";
-type Mode = "Live AI" | "Wrong answer";
 type SceneType = "literal" | "abstract" | "mixed";
 
 interface Message {
@@ -252,17 +254,6 @@ Output format:
 3. Two sentences explaining what changed visually and emotionally.
 4. One specific follow-up refinement question.`;
 
-const TEST_RESPONSES: Record<string, string> = {
-  "Wrong answer": `I think the best way to represent your story is with a pancake recipe.
-
-Ingredients:
-- 1 cup flour
-- 1 egg
-- 1 cup milk
-
-Would you like me to make it fluffier?`,
-};
-
 function extractCode(text: string): string | null {
   const fence = /```[\w]*\s*\r?\n([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
@@ -442,7 +433,6 @@ async function callAnthropicChat(
 
 export const App: React.FC = () => {
   const [apiKey, setApiKey] = useState("");
-  const [mode, setMode] = useState<Mode>("Live AI");
   const [history, setHistory] = useState<Message[]>([]);
   const [turnCount, setTurnCount] = useState(0);
   const [lastCode, setLastCode] = useState<string | null>(null);
@@ -452,6 +442,127 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const tourSteps: Step[] = useMemo(
+    () => [
+      {
+        target: "body",
+        placement: "center",
+        title: "Welcome to Feel Sketch",
+        content:
+          "This quick walkthrough will show you the main parts of the studio. You can click Next, or close it any time.",
+      },
+      {
+        target: "#fs-header",
+        placement: "bottom",
+        title: "What you’re making",
+        content:
+          "Feel Sketch turns an emotion or memory into a p5.js sketch, and shows the result live on the right.",
+      },
+      {
+        target: "#fs-chat",
+        placement: "right",
+        title: "Studio chat",
+        content:
+          "This is the conversation history. The AI will ask a couple questions, then generate a full sketch.",
+      },
+      {
+        target: "#fs-input",
+        placement: "top",
+        title: "Your prompt",
+        content:
+          "Describe a feeling or emotional state. Press Enter to send (Shift+Enter for a new line).",
+      },
+      {
+        target: "#fs-actions",
+        placement: "top",
+        title: "Actions",
+        content:
+          "Send creates the next message. New Story resets everything and starts fresh.",
+      },
+      {
+        target: "#fs-preview-panel",
+        placement: "left",
+        title: "Live preview + outputs",
+        content:
+          "Your generated p5.js sketch renders here. After the first generation, you can also view the visual plan and copy the code.",
+      },
+      {
+        target: "body",
+        placement: "center",
+        title: "A couple of examples",
+        content: (
+          <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+            <p style={{ margin: "0 0 8px 0" }}>
+              Here are two <b>example sketches</b> this studio could make from simple feelings:
+            </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 8,
+              }}
+            >
+              <figure
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  background: "#fff7ec",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                  border: "1px solid rgba(180,155,140,0.35)",
+                }}
+              >
+                <img
+                  src={sunnyExample}
+                  alt="Abstract sunny, happy sketch with warm yellow circles"
+                  style={{ width: "100%", display: "block" }}
+                />
+                <figcaption
+                  style={{
+                    padding: "4px 6px 6px",
+                    fontSize: 11,
+                    color: "#5c5248",
+                  }}
+                >
+                  “I feel happy and excited because it&apos;s sunny today.”
+                </figcaption>
+              </figure>
+              <figure
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  background: "#f0f5ff",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                  border: "1px solid rgba(180,155,140,0.35)",
+                }}
+              >
+                <img
+                  src={lonelyExample}
+                  alt="Abstract lonely woods sketch with cool blues and tall shapes"
+                  style={{ width: "100%", display: "block" }}
+                />
+                <figcaption
+                  style={{
+                    padding: "4px 6px 6px",
+                    fontSize: 11,
+                    color: "#5c5248",
+                  }}
+                >
+                  “I feel lonely, like I&apos;m walking through the woods by myself.”
+                </figcaption>
+              </figure>
+            </div>
+          </div>
+        ),
+      },
+    ],
+    []
+  );
+
+  const [runTour, setRunTour] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
@@ -471,6 +582,20 @@ export const App: React.FC = () => {
       }),
     }).catch(() => { });
   }, []);
+
+  useEffect(() => {
+    setRunTour(true);
+  }, []);
+
+  const handleTourCallback = useCallback(
+    (data: CallBackProps) => {
+      const finished = data.status === STATUS.FINISHED || data.status === STATUS.SKIPPED;
+      if (finished) {
+        setRunTour(false);
+      }
+    },
+    []
+  );
 
   const iframeSrcDoc = useMemo(() => {
     if (!lastCode) return "";
@@ -614,7 +739,43 @@ ${lastCode}
     try {
       let reply: string;
 
-      if (mode === "Live AI") {
+      fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": "e5f2c7",
+        },
+        body: JSON.stringify({
+          sessionId: "e5f2c7",
+          runId: "initial",
+          hypothesisId: "H1",
+          location: "src/App.tsx:handleSend",
+          message: "handleSend before API call",
+          data: {
+            turnCount,
+            textLength: text.length,
+            hasLastCode: !!lastCode,
+            hasLastVisualSpec: !!lastVisualSpec,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => { });
+
+      if (turnCount === 0) {
+        const newHistory: Message[] = [...history, userMessage];
+        reply = await callAnthropicChat("", INTAKE_PROMPT, newHistory);
+      } else if (turnCount === 1) {
+        const specHistory: Message[] = [...history, userMessage];
+
+        const specReply = await callAnthropicChat("", VISUAL_SPEC_PROMPT, specHistory);
+        const parsedSpec = parseVisualSpec(specReply);
+
+        if (!parsedSpec) {
+          throw new Error("Could not parse VisualSpec JSON from model output.");
+        }
+
+        setLastVisualSpec(parsedSpec);
+
         fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
           method: "POST",
           headers: {
@@ -624,60 +785,22 @@ ${lastCode}
           body: JSON.stringify({
             sessionId: "e5f2c7",
             runId: "initial",
-            hypothesisId: "H1",
-            location: "src/App.tsx:handleSend",
-            message: "handleSend before API call",
-            data: {
-              mode,
-              turnCount,
-              textLength: text.length,
-              hasLastCode: !!lastCode,
-              hasLastVisualSpec: !!lastVisualSpec,
-            },
+            hypothesisId: "H4",
+            location: "src/App.tsx:visualSpec",
+            message: "VisualSpec parsed successfully",
+            data: parsedSpec,
             timestamp: Date.now(),
           }),
         }).catch(() => { });
 
-        if (turnCount === 0) {
-          const newHistory: Message[] = [...history, userMessage];
-          reply = await callAnthropicChat("", INTAKE_PROMPT, newHistory);
-        } else if (turnCount === 1) {
-          const specHistory: Message[] = [...history, userMessage];
-
-          const specReply = await callAnthropicChat("", VISUAL_SPEC_PROMPT, specHistory);
-          const parsedSpec = parseVisualSpec(specReply);
-
-          if (!parsedSpec) {
-            throw new Error("Could not parse VisualSpec JSON from model output.");
-          }
-
-          setLastVisualSpec(parsedSpec);
-
-          fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Debug-Session-Id": "e5f2c7",
-            },
-            body: JSON.stringify({
-              sessionId: "e5f2c7",
-              runId: "initial",
-              hypothesisId: "H4",
-              location: "src/App.tsx:visualSpec",
-              message: "VisualSpec parsed successfully",
-              data: parsedSpec,
-              timestamp: Date.now(),
-            }),
-          }).catch(() => { });
-
-          const generationHistory = buildGenerationMessages(history, augmentedUserText, parsedSpec);
-          reply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
-        } else {
-          const refinementHistory: Message[] = [
-            ...history,
-            {
-              role: "user",
-              content: `User refinement request:
+        const generationHistory = buildGenerationMessages(history, augmentedUserText, parsedSpec);
+        reply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
+      } else {
+        const refinementHistory: Message[] = [
+          ...history,
+          {
+            role: "user",
+            content: `User refinement request:
 ${text}
 
 Current visual plan:
@@ -689,13 +812,10 @@ ${lastCode ?? ""}
 \`\`\`
 
 Important: update this existing sketch instead of replacing it from scratch.`,
-            },
-          ];
+          },
+        ];
 
-          reply = await callAnthropicChat("", REFINEMENT_PROMPT, refinementHistory);
-        }
-      } else {
-        reply = TEST_RESPONSES[mode] ?? "No test response configured.";
+        reply = await callAnthropicChat("", REFINEMENT_PROMPT, refinementHistory);
       }
 
       setHistory((prev) => [...prev, { role: "assistant", content: reply }]);
@@ -762,7 +882,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
       setLoading(false);
       setTimeout(scrollToBottom, 0);
     }
-  }, [history, input, lastCode, lastVisualSpec, loading, mode, scrollToBottom, turnCount]);
+  }, [history, input, lastCode, lastVisualSpec, loading, scrollToBottom, turnCount]);
 
   const handleNewStory = useCallback(() => {
     setHistory([]);
@@ -790,6 +910,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
 
   return (
     <div
+      id="fs-root"
       style={{
         minHeight: "100vh",
         background:
@@ -803,6 +924,26 @@ Important: update this existing sketch instead of replacing it from scratch.`,
         boxSizing: "border-box",
       }}
     >
+      <Joyride
+        steps={tourSteps}
+        run={runTour}
+        callback={handleTourCallback}
+        continuous
+        showSkipButton
+        showProgress
+        scrollToFirstStep
+        spotlightPadding={10}
+        styles={{
+          options: {
+            zIndex: 10000,
+            arrowColor: "#ffffff",
+            backgroundColor: "#ffffff",
+            overlayColor: "rgba(20, 14, 12, 0.55)",
+            primaryColor: "#b8956e",
+            textColor: "#2c2c2c",
+          },
+        }}
+      />
       <div
         style={{
           width: "100%",
@@ -824,9 +965,11 @@ Important: update this existing sketch instead of replacing it from scratch.`,
         }}
       >
         <div
+            id="fs-leftpanel"
           style={{
             display: "flex",
             flexDirection: "column",
+            position: "relative",
             minWidth: 0,
             minHeight: 0,
             overflow: "hidden",
@@ -840,7 +983,34 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             WebkitBackdropFilter: "blur(10px)",
           }}
         >
+          <button
+            type="button"
+            aria-label="Help and examples"
+            onClick={() => setShowHelp(true)}
+            style={{
+              position: "absolute",
+              top: 12,
+              right: 12,
+              width: 26,
+              height: 26,
+              borderRadius: "999px",
+              border: "1px solid rgba(140,120,100,0.4)",
+              background: "rgba(255, 248, 236, 0.9)",
+              color: "#5c5248",
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+            }}
+          >
+            ?
+          </button>
+
           <div
+              id="fs-header"
             style={{
               display: "flex",
               alignItems: "center",
@@ -864,39 +1034,19 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             </h1>
           </div>
 
-          <div
+          <p
             style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-              alignItems: "center",
-              marginBottom: 8,
+              margin: "0 0 12px 0",
               fontSize: 13,
+              lineHeight: 1.5,
+              color: "#5c5248",
+              maxWidth: 520,
             }}
           >
-            <label style={{ color: "#5c5248" }}>
-              Response mode:{" "}
-              <select
-                value={mode}
-                onChange={(e) => setMode(e.target.value as Mode)}
-                style={{
-                  background: "rgba(255,240,228,0.6)",
-                  color: "#4a4038",
-                  border: "1px solid rgba(180,155,140,0.35)",
-                  borderRadius: 6,
-                  padding: "4px 8px",
-                  fontSize: 13,
-                }}
-              >
-                <option value="Live AI">Live AI</option>
-                {Object.keys(TEST_RESPONSES).map((key) => (
-                  <option key={key} value={key}>
-                    {key}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+            This studio is for generating{" "}
+            <b>abstract, emotional p5.js sketches</b> — think moods and metaphors,
+            not literal or photorealistic images.
+          </p>
 
           {error && (
             <div
@@ -921,6 +1071,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
           )}
 
           <div
+              id="fs-chat"
             ref={chatContainerRef}
             style={{
               border: "1px solid rgba(180,155,140,0.35)",
@@ -935,7 +1086,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
           >
             {history.length === 0 && (
               <div style={{ marginBottom: 8 }}>
-                <b style={{ color: "#8b6914" }}>🤖 Studio AI:</b>{" "}
+                <b style={{ color: "#8b6914" }}>🤖 Sketch Guide:</b>{" "}
                 <span>
                   Hi! Tell me a feeling, memory, or mood you want to turn into a sketch,
                   and I&apos;ll help shape it into something visual.
@@ -956,7 +1107,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                   </div>
                 ) : (
                   <div>
-                    <b style={{ color: "#8b6914" }}>🤖 Studio AI</b>
+                    <b style={{ color: "#8b6914" }}>🤖 Sketch Guide</b>
                     <br />
                     <span
                       style={{ whiteSpace: "pre-wrap" }}
@@ -983,7 +1134,8 @@ Important: update this existing sketch instead of replacing it from scratch.`,
           </div>
 
           <textarea
-            placeholder="Describe a feeling, memory, or mood. You can mention images, weather, colors, motion, or symbols that fit it — for example: ‘the panic before a deadline, like flickering lights and papers blowing around’."
+              id="fs-input"
+            placeholder="Describe a feeling or emotional state. You can mention images, weather, colors, motion, or symbols that fit it — for example: ‘the panic before a deadline, like flickering lights and papers blowing around’."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -1007,7 +1159,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             }}
           />
 
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <div id="fs-actions" style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button
               type="button"
               onClick={() => void handleSend()}
@@ -1048,6 +1200,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
         </div>
 
         <div
+          id="fs-preview-panel"
           style={{
             minWidth: 0,
             minHeight: 0,
@@ -1242,6 +1395,145 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             </details>
           )}
         </div>
+
+        {showHelp && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setShowHelp(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(20, 14, 12, 0.45)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 11000,
+              padding: 16,
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                maxWidth: 720,
+                width: "100%",
+                background: "#fdfaf7",
+                borderRadius: 16,
+                border: "1px solid rgba(140,120,100,0.25)",
+                boxShadow:
+                  "0 18px 40px rgba(0,0,0,0.25), 0 0 0 1px rgba(255,255,255,0.6) inset",
+                padding: 16,
+                fontSize: 13,
+                color: "#4a4038",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 8,
+                }}
+              >
+                <h2
+                  style={{
+                    margin: 0,
+                    fontSize: 16,
+                    fontWeight: 600,
+                    color: "#3d342c",
+                  }}
+                >
+                  How to use Feel Sketch
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowHelp(false)}
+                  aria-label="Close help"
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "#6b6156",
+                    fontSize: 18,
+                    cursor: "pointer",
+                    padding: 4,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <p style={{ margin: "4px 0 10px" }}>
+                Describe a feeling or emotional state in words. The AI will ask a couple of quick
+                follow‑up questions, then turn it into an{" "}
+                <b>abstract, emotional p5.js sketch</b> instead of a literal illustration.
+              </p>
+
+              <p style={{ margin: "0 0 8px 0" }}>
+                For example, these two sketches could come from:
+              </p>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 10,
+                }}
+              >
+                <figure
+                  style={{
+                    margin: 0,
+                    padding: 0,
+                    background: "#fff7ec",
+                    borderRadius: 8,
+                    overflow: "hidden",
+                    border: "1px solid rgba(180,155,140,0.35)",
+                  }}
+                >
+                  <img
+                    src={sunnyExample}
+                    alt="Abstract sunny, happy sketch with warm yellow circles"
+                    style={{ width: "100%", display: "block" }}
+                  />
+                  <figcaption
+                    style={{
+                      padding: "4px 6px 6px",
+                      fontSize: 11,
+                      color: "#5c5248",
+                    }}
+                  >
+                    “I feel happy and excited because it&apos;s sunny today.”
+                  </figcaption>
+                </figure>
+
+                <figure
+                  style={{
+                    margin: 0,
+                    padding: 0,
+                    background: "#f0f5ff",
+                    borderRadius: 8,
+                    overflow: "hidden",
+                    border: "1px solid rgba(180,155,140,0.35)",
+                  }}
+                >
+                  <img
+                    src={lonelyExample}
+                    alt="Abstract lonely woods sketch with cool blues and tall shapes"
+                    style={{ width: "100%", display: "block" }}
+                  />
+                  <figcaption
+                    style={{
+                      padding: "4px 6px 6px",
+                      fontSize: 11,
+                      color: "#5c5248",
+                    }}
+                  >
+                    “I feel lonely, like I&apos;m walking through the woods by myself.”
+                  </figcaption>
+                </figure>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
