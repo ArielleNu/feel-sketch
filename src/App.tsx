@@ -197,7 +197,12 @@ CODE RELIABILITY RULES:
 - The sketch must run as-is in a browser with p5.js already loaded.
 - The code must include createCanvas(400, 400), function setup(), and function draw().
 - If the user requests an error to be made in the code, throw a runtime error in the sketch code.
-
+- Always initialize all object properties in the constructor before using them in other methods.
+- Never access properties of array elements without bounds-checking (e.g. check array length before indexing).
+- All class methods must only reference "this." properties that are explicitly set in the constructor.
+- When one object references another (e.g. an Orb referencing a target position), always provide a fallback or default value in case the reference is undefined.
+- Before accessing any property like obj.x, verify obj is not null/undefined, or initialize it with a safe default.
+- Only use valid p5.js blend modes: BLEND, ADD, DARKEST, LIGHTEST, DIFFERENCE, EXCLUSION, MULTIPLY, SCREEN, REPLACE, OVERLAY, HARD_LIGHT, SOFT_LIGHT, DODGE, BURN. Never use LIGHTEN, DARKEN, or any other blend mode name.
 
 Your reply MUST include exactly one fenced javascript code block.
 Do not place the sketch outside the code block.
@@ -442,6 +447,8 @@ export const App: React.FC = () => {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sketchProgress, setSketchProgress] = useState(0);
+  const [sketchGenerating, setSketchGenerating] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -589,6 +596,21 @@ export const App: React.FC = () => {
     setRunTour(true);
   }, []);
 
+  useEffect(() => {
+  if (!sketchGenerating) {
+    setSketchProgress(0);
+    return;
+  }
+  setSketchProgress(0);
+  const interval = setInterval(() => {
+    setSketchProgress((prev) => {
+      if (prev >= 92) { clearInterval(interval); return prev; }
+      return prev + Math.random() * 4;
+    });
+  }, 400);
+  return () => clearInterval(interval);
+}, [sketchGenerating]);
+
   const handleTourCallback = useCallback(
     (data: CallBackProps) => {
       const finished = data.status === STATUS.FINISHED || data.status === STATUS.SKIPPED;
@@ -733,7 +755,7 @@ ${lastCode}
 
     const userMessage: Message = {
       role: "user",
-      content: augmentedUserText,
+      content: text,
     };
 
     setHistory((prev) => [...prev, userMessage]);
@@ -777,16 +799,20 @@ ${lastCode}
         if (parsedSpec) {
           setLastVisualSpec(parsedSpec);
           const generationHistory = buildGenerationMessages(history, text, parsedSpec);
-          try {
-            const codeReply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
-            const code = extractCode(codeReply);
-            if (code && looksLikeRunnableP5(code)) setLastCode(code);
-            else console.warn("Code extracted but failed p5 check:", codeReply.slice(0, 200));
-          } catch (err) {
-            console.error("Sketch generation failed:", err);
-          }
+          setSketchGenerating(true);
+        try {
+          const codeReply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
+          const code = extractCode(codeReply);
+          if (code && looksLikeRunnableP5(code)) {
+            setSketchProgress(100);
+            setLastCode(code);
+          } else console.warn("Code extracted but failed p5 check:", codeReply.slice(0, 200));
+        } catch (err) {
+          console.error("Sketch generation failed:", err);
+        } finally {
+          setSketchGenerating(false);
         }
-
+      }
         // Now add the intake follow-up questions to chat
         reply = intakeReply;
       } else if (turnCount === 1) {
@@ -819,7 +845,13 @@ ${lastCode}
         }).catch(() => { });
 
         const generationHistory = buildGenerationMessages(history, augmentedUserText, parsedSpec);
-        reply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
+        setSketchGenerating(true);
+        try {
+          reply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
+          setSketchProgress(100);
+        } finally {
+          setSketchGenerating(false);
+        }
       } else {
         const refinementHistory: Message[] = [
           ...history,
@@ -921,13 +953,24 @@ Important: update this existing sketch instead of replacing it from scratch.`,
   const cleanedHistory = useMemo(
     () =>
       history.map((m) => {
-        if (m.role !== "assistant") return m;
-
-        const clean = sanitizeHtml(m.content).replace(
-          /```[\w]*\s*\r?\n[\s\S]*?```/g,
-          "<em>[sketch generated ↓]</em>"
-        );
-
+        if (m.role === "assistant") {
+          const clean = sanitizeHtml(m.content)
+            // Strip complete code blocks
+            .replace(
+              /```[\w]*\s*\r?\n[\s\S]*?```/g,
+              "<em>[sketch generated ↓]</em>"
+            )
+            // Strip incomplete/cut-off code blocks (no closing ```)
+            .replace(
+              /```[\w]*\s*\r?\n[\s\S]*/g,
+              "<em>[sketch was cut off — please try again]</em>"
+            );
+          return { ...m, content: clean };
+        }
+        const clean = m.content.replace(
+          /\[Current sketch to build on:\]\s*```[\w]*\s*\r?\n[\s\S]*?```/g,
+          ""
+        ).trim();
         return { ...m, content: clean };
       }),
     [history]
@@ -1089,7 +1132,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                 lineHeight: 1.4,
               }}
             >
-              <b>Something went wrong generating the sketch.</b>
+              <b>Something went wrong generating the sketch. Prompt has exceeded max_tokens.</b>
               <br />
               {error}
               <br />
@@ -1148,15 +1191,13 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             ))}
 
             {loading && (
-              <div
-                style={{
-                  color: "#6b6156",
-                  fontStyle: "italic",
-                  fontSize: 12,
-                  marginTop: 4,
-                }}
-              >
-                ⏳ thinking…
+              <div style={{ color: "#6b6156", fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
+                <span style={{
+                  display: "inline-block",
+                  animation: "spin 1s linear infinite",
+                }}>⏳</span>{" "}
+                {sketchGenerating ? "generating sketch…" : "thinking…"}
+                <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
               </div>
             )}
           </div>
@@ -1271,7 +1312,17 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                 {lastCode ? "p5.js loaded" : "waiting for first sketch"}
               </span>
             </div>
-
+            {sketchGenerating && (
+              <div style={{ width: "100%", height: 4, background: "rgba(200,180,160,0.3)" }}>
+                <div style={{
+                  height: "100%",
+                  width: `${sketchProgress}%`,
+                  background: "linear-gradient(90deg, #e05070, #ffaac0)",
+                  transition: "width 0.4s ease",
+                  borderRadius: 2,
+                }} />
+              </div>
+            )}
             <div
               style={{
                 width: 400,
@@ -1389,40 +1440,48 @@ Important: update this existing sketch instead of replacing it from scratch.`,
           )}
 
           {lastCode && (
-            <details
-              open
+          <details
+            open
+            style={{
+              margin: "8px auto 0",
+              maxWidth: 420,
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+              fontSize: 12,
+            }}
+          >
+            <summary
               style={{
-                margin: "8px auto 0",
-                maxWidth: 420,
-                fontFamily:
-                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                fontSize: 12,
+                cursor: "pointer",
+                color: "#8b6914",
+                listStyle: "none",
               }}
             >
-              <summary
-                style={{
-                  cursor: "pointer",
-                  color: "#8b6914",
-                  listStyle: "none",
-                }}
-              >
-                📋 View / copy generated code
-              </summary>
-              <pre
-                style={{
-                  background: "rgba(245,232,218,0.9)",
-                  color: "#4a4038",
-                  padding: 12,
-                  borderRadius: 6,
-                  overflowX: "auto",
-                  whiteSpace: "pre-wrap",
-                  marginTop: 8,
-                }}
-              >
-                {lastCode}
-              </pre>
-            </details>
-          )}
+              📋 Edit generated code
+            </summary>
+            <textarea
+              value={lastCode}
+              onChange={(e) => setLastCode(e.target.value)}
+              spellCheck={false}
+              style={{
+                marginTop: 8,
+                width: "100%",
+                height: 460,
+                resize: "vertical",
+                background: "rgba(245,232,218,0.9)",
+                color: "#4a4038",
+                padding: 12,
+                borderRadius: 6,
+                border: "1px solid rgba(180,155,140,0.35)",
+                fontSize: 12,
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                whiteSpace: "pre",
+                boxSizing: "border-box",
+              }}
+            />
+          </details>
+        )}
         </div>
 
         {showHelp && (
