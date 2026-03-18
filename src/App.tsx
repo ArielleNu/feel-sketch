@@ -490,11 +490,25 @@ export const App: React.FC = () => {
           "Send creates the next message. New Story resets everything and starts fresh.",
       },
       {
-        target: "#fs-preview-panel",
+        target: "#fs-sketch",
         placement: "left",
-        title: "Live preview + outputs",
+        title: "Live sketch preview",
         content:
-          "Your generated p5.js sketch renders here. After the first generation, you can also view the visual plan and copy the code.",
+          "This box is the sketch itself. As the p5.js code runs, it draws here — and any edits you make to the generated code will update this exact region.",
+      },
+      {
+        target: "#fs-visual-plan",
+        placement: "left",
+        title: "Visual plan panel",
+        content:
+          "This dropdown shows the visual plan that describes how the sketch is structured. It’s collapsible so you can quickly peek at or hide the plan.",
+      },
+      {
+        target: "#fs-code-panel",
+        placement: "left",
+        title: "Generated code panel",
+        content:
+          "This dropdown contains the generated p5.js code. It’s fully editable and collapsible, so you can focus on the code when you need to and close it when you want more room for the sketch.",
       },
       {
         target: "body",
@@ -572,6 +586,8 @@ export const App: React.FC = () => {
 
   const [runTour, setRunTour] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [visualPlanOpen, setVisualPlanOpen] = useState(false);
+  const [codePanelOpen, setCodePanelOpen] = useState(false);
 
   useEffect(() => {
     fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
@@ -614,8 +630,20 @@ export const App: React.FC = () => {
   const handleTourCallback = useCallback(
     (data: CallBackProps) => {
       const finished = data.status === STATUS.FINISHED || data.status === STATUS.SKIPPED;
+      const running = data.status === STATUS.RUNNING;
+
       if (finished) {
+        // When the user finishes or skips the walkthrough, close both panels again.
         setRunTour(false);
+        setVisualPlanOpen(false);
+        setCodePanelOpen(false);
+        return;
+      }
+
+      if (running) {
+        // While the walkthrough is running, keep both panels open so they’re easy to see.
+        setVisualPlanOpen(true);
+        setCodePanelOpen(true);
       }
     },
     []
@@ -666,9 +694,9 @@ export const App: React.FC = () => {
 </head>
 <body>
   <div id="error-overlay">
-    <div id="error-title">Sketch runtime error</div>
+    <div id="error-title">Code error in sketch</div>
     <div id="error-message"></div>
-    <div id="error-help">Please click "New Story 🔄" to restart the sketch.</div>
+    <div id="error-help">There&apos;s a problem in the p5.js code. Fix the error in the Generated code panel below and the sketch will try to run again.</div>
   </div>
 
   <script>
@@ -1324,6 +1352,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
               </div>
             )}
             <div
+              id="fs-sketch"
               style={{
                 width: 400,
                 height: 400,
@@ -1404,44 +1433,9 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             </div>
           </div>
 
-          {lastVisualSpec && (
-            <details
-              style={{
-                margin: "8px auto 0",
-                maxWidth: 420,
-                fontFamily:
-                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                fontSize: 12,
-              }}
-            >
-              <summary
-                style={{
-                  cursor: "pointer",
-                  color: "#8b6914",
-                  listStyle: "none",
-                }}
-              >
-                🧠 View visual plan
-              </summary>
-              <pre
-                style={{
-                  background: "rgba(245,232,218,0.9)",
-                  color: "#4a4038",
-                  padding: 12,
-                  borderRadius: 6,
-                  overflowX: "auto",
-                  whiteSpace: "pre-wrap",
-                  marginTop: 8,
-                }}
-              >
-                {JSON.stringify(lastVisualSpec, null, 2)}
-              </pre>
-            </details>
-          )}
-
-          {lastCode && (
           <details
-            open
+            id="fs-visual-plan"
+            open={visualPlanOpen}
             style={{
               margin: "8px auto 0",
               maxWidth: 420,
@@ -1456,13 +1450,82 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                 color: "#8b6914",
                 listStyle: "none",
               }}
+              onClick={(e) => {
+                e.preventDefault();
+                setVisualPlanOpen((prev) => !prev);
+              }}
             >
-              📋 Edit generated code
+              🧠 Visual plan (click to collapse)
             </summary>
+            {lastVisualSpec ? (
+              <pre
+                style={{
+                  background: "rgba(245,232,218,0.9)",
+                  color: "#4a4038",
+                  padding: 12,
+                  borderRadius: 6,
+                  overflowX: "auto",
+                  whiteSpace: "pre-wrap",
+                  marginTop: 8,
+                }}
+              >
+                {JSON.stringify(lastVisualSpec, null, 2)}
+              </pre>
+            ) : (
+              <div
+                style={{
+                  background: "rgba(245,232,218,0.6)",
+                  color: "#4a4038",
+                  padding: 10,
+                  borderRadius: 6,
+                  marginTop: 8,
+                }}
+              >
+                The visual plan for your sketch will appear here after you chat about a feeling.
+                You can always collapse or expand this section.
+              </div>
+            )}
+          </details>
+
+          <details
+            id="fs-code-panel"
+            open={codePanelOpen}
+            style={{
+              margin: "8px auto 0",
+              maxWidth: 420,
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+              fontSize: 12,
+            }}
+          >
+            <summary
+              style={{
+                cursor: "pointer",
+                color: "#8b6914",
+                listStyle: "none",
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                setCodePanelOpen((prev) => !prev);
+              }}
+            >
+              📋 Generated code (editable, collapsible)
+            </summary>
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 11,
+                color: "#6b6156",
+              }}
+            >
+              This is the p5.js sketch code. You can edit it directly and the live preview above will
+              update. Click this header any time to collapse or reopen the code.
+            </div>
             <textarea
-              value={lastCode}
+              value={lastCode ?? ""}
               onChange={(e) => setLastCode(e.target.value)}
               spellCheck={false}
+              placeholder="Once a sketch is generated, its p5.js code will appear here so you can tweak and learn from it."
               style={{
                 marginTop: 8,
                 width: "100%",
@@ -1481,7 +1544,6 @@ Important: update this existing sketch instead of replacing it from scratch.`,
               }}
             />
           </details>
-        )}
         </div>
 
         {showHelp && (
@@ -1554,6 +1616,13 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                 Describe a feeling or emotional state in words. The AI will ask a couple of quick
                 follow‑up questions, then turn it into an{" "}
                 <b>abstract, emotional p5.js sketch</b> instead of a literal illustration.
+              </p>
+
+              <p style={{ margin: "0 0 8px 0" }}>
+                Under the live preview on the right you&apos;ll always see two collapsible panels:
+                one for the <b>visual plan</b> (how the sketch is structured) and one for the
+                <b> generated code</b>. The code panel is fully <b>editable</b>, and any changes you
+                make there will update the sketch.
               </p>
 
               <p style={{ margin: "0 0 8px 0" }}>
