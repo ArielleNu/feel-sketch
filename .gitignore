@@ -18,3 +18,7 @@ build
 .DS_Store
 *.swp
 *.swo
+
+
+#git logs
+log.csv
