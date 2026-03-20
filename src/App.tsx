@@ -487,7 +487,7 @@ export const App: React.FC = () => {
         placement: "top",
         title: "Actions",
         content:
-          "Send creates the next message. New Story resets everything and starts fresh.",
+          "Send creates the next message. New Chat resets everything and starts fresh.",
       },
       {
         target: "#fs-sketch",
@@ -910,7 +910,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
         !reply.includes("```", reply.indexOf("```javascript") + 3)
       ) {
         setError(
-          "The AI response was cut off before the sketch finished generating. Please try again or click New Story."
+          "The AI response was cut off before the sketch finished generating. Please try again or click New Chat."
         );
         return;
       }
@@ -1165,7 +1165,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
               {error}
               <br />
               <br />
-              Please click <b>"New Story 🔄"</b> to restart the sketch.
+              Please click <b>"New Chat 🔄"</b> to restart the sketch.
             </div>
           )}
 
@@ -1187,7 +1187,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
               <div style={{ marginBottom: 8 }}>
                 <b style={{ color: "#8b6914" }}>🤖 Sketch Guide:</b>{" "}
                 <span>
-                  Hi! Tell me a feeling, memory, or mood you want to turn into a sketch,
+                  Hi! Tell me a feeling or mood you want to turn into a sketch,
                   and I&apos;ll help shape it into something visual.
                 </span>
                 <hr style={{ borderColor: "rgba(140,120,100,0.25)", marginTop: 8 }} />
@@ -1291,7 +1291,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                 cursor: loading ? "default" : "pointer",
               }}
             >
-              New Story 🔄
+              New Chat 🔄
             </button>
           </div>
         </div>
@@ -1421,7 +1421,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                     alignItems: "center",
                     justifyContent: "center",
                     height: "100%",
-                    color: "#6b6156",
+                    color: "#ebd8c4",
                     fontSize: 13,
                     padding: 16,
                     textAlign: "center",

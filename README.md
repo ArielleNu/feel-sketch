@@ -7,12 +7,14 @@ A React web app that turns emotions and memories into animated p5.js sketches. C
 ## Setup
 
 1. **Clone the repo** (if you haven’t already):
+
    ```bash
    git clone <repo-url>
    cd feel-sketch
    ```
 
 2. **Install dependencies**:
+
    ```bash
    npm install
    ```
@@ -29,29 +31,33 @@ A React web app that turns emotions and memories into animated p5.js sketches. C
 You need two processes: the API server and the React app.
 
 1. **Start the API server** (in one terminal):
+
    ```bash
    npm run dev:server
    ```
+
    Leave it running. You should see: `Feel Sketch API server listening on http://localhost:8787`
 
 2. **Start the React app** (in a second terminal):
+
    ```bash
    npm run dev
    ```
+
    Open the URL Vite prints (usually `http://localhost:5173`) in your browser.
 
 3. In the app, keep **Response mode** on **Live AI** and start describing a memory or feeling. After the short intake, say **“go”** to generate your first sketch; the preview updates on the right.
 
 ## Scripts
 
-| Command            | Description                          |
-|--------------------|--------------------------------------|
-| `npm run dev`      | Start Vite dev server (React app)    |
+| Command              | Description                         |
+| -------------------- | ----------------------------------- |
+| `npm run dev`        | Start Vite dev server (React app)   |
 | `npm run dev:server` | Start Node API server (for Live AI) |
-| `npm run build`    | Build for production (`dist/`)       |
-| `npm run preview`  | Preview the production build         |
+| `npm run build`      | Build for production (`dist/`)      |
+| `npm run preview`    | Preview the production build        |
 
 ## Notes
 
 - **Test mode:** In the UI, you can switch **Response mode** to **“Wrong answer”** to try the flow without using the API.
-- **New conversation:** Use **New Story** to clear the chat and start over.
+- **New conversation:** Use **New Chat** to clear the chat and start over.
