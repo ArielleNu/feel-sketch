@@ -31,6 +31,49 @@ interface VisualSpec {
   visualStyle: string;
 }
 
+interface ChatSession {
+  id: string;
+  title: string;
+  timestamp: number;
+  history: Message[];
+  lastCode: string | null;
+  lastVisualSpec: VisualSpec | null;
+  turnCount: number;
+}
+
+const SESSIONS_KEY = "feel-sketch-sessions";
+
+function loadSessions(): ChatSession[] {
+  try {
+    const raw = localStorage.getItem(SESSIONS_KEY);
+    return raw ? (JSON.parse(raw) as ChatSession[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(sessions: ChatSession[]): void {
+  try {
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+  } catch {}
+}
+
+function generateId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const diff = Date.now() - timestamp;
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 const PaintMark: React.FC = () => (
   <svg
     width="46"
@@ -87,25 +130,16 @@ const PaintMark: React.FC = () => (
   </svg>
 );
 
-const INTAKE_PROMPT = `You are an encouraging AI creative partner helping novice programmers turn emotions, memories, and moods into animated p5.js sketches.
+const INTAKE_PROMPT = `You are an encouraging AI creative partner helping turn emotions and memories into expressive animated p5.js sketches. The sketches are always abstract — shapes, color, motion, and texture that evoke a feeling, not literal illustrations.
 
-Your job right now is ONLY to gather visual direction. Do NOT generate code yet.
+A first sketch is already generating from the user's description. Your job is to ask 2–3 warm, focused follow-up questions so we can refine it together.
 
-Ask the user these questions in a warm, natural way:
-- What feeling, memory, or moment do you want the sketch to capture?
-- What images, places, objects, weather, textures, or symbols come to mind with it?
-- Should the sketch feel more literal (like a scene) or more abstract (like moving shapes and light)?
-- Should the motion feel calm, uneasy, chaotic, dreamy, energetic, heavy, or something else?
-- Do they want warm colors, cool colors, monochrome, or should you choose?
+Ask about things that genuinely shape the visual direction:
+- What images, textures, weather, objects, or physical sensations come to mind with this feeling?
+- What is the energy or motion like — slow, heavy, restless, scattered, pulsing, drifting?
+- Any color instincts — warm, cool, dark, vivid, muted? Or you can decide.
 
-After they answer, briefly summarize:
-1. the emotional tone
-2. the main visual elements
-3. the motion style
-4. the color direction
-
-Then say exactly: "Ready to sketch — just say go!"
-Do not write code.`;
+Ask conversationally, not as a numbered list. Be warm and brief. Do not generate code.`;
 
 const VISUAL_SPEC_PROMPT = `You are an AI visual development partner.
 
@@ -449,8 +483,12 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [sketchProgress, setSketchProgress] = useState(0);
   const [sketchGenerating, setSketchGenerating] = useState(false);
+  const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions());
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const hasAutoOpenedCodeRef = useRef(false);
 
   const tourSteps: Step[] = useMemo(
     () => [
@@ -588,6 +626,7 @@ export const App: React.FC = () => {
   const [showHelp, setShowHelp] = useState(false);
   const [visualPlanOpen, setVisualPlanOpen] = useState(false);
   const [codePanelOpen, setCodePanelOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
     fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
@@ -611,6 +650,48 @@ export const App: React.FC = () => {
   useEffect(() => {
     setRunTour(true);
   }, []);
+
+  // Auto-open code panel on first sketch generation
+  useEffect(() => {
+    if (lastCode && !hasAutoOpenedCodeRef.current) {
+      hasAutoOpenedCodeRef.current = true;
+      setCodePanelOpen(true);
+    }
+  }, [lastCode]);
+
+  // Auto-save current session to localStorage whenever conversation state changes
+  useEffect(() => {
+    if (history.length === 0) return;
+
+    let sid = sessionIdRef.current;
+    if (!sid) {
+      sid = generateId();
+      sessionIdRef.current = sid;
+      setCurrentSessionId(sid);
+    }
+
+    const title = (history.find((m) => m.role === "user")?.content ?? "Untitled")
+      .slice(0, 50)
+      .trim();
+
+    const session: ChatSession = {
+      id: sid,
+      title,
+      timestamp: Date.now(),
+      history,
+      lastCode,
+      lastVisualSpec,
+      turnCount,
+    };
+
+    setSessions((prev) => {
+      const filtered = prev.filter((s) => s.id !== sid);
+      const updated = [session, ...filtered].slice(0, 50);
+      saveSessions(updated);
+      return updated;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, lastCode, lastVisualSpec, turnCount]);
 
   useEffect(() => {
   if (!sketchGenerating) {
@@ -976,6 +1057,22 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setLastVisualSpec(null);
     setError(null);
     setInput("");
+    setCurrentSessionId(null);
+    sessionIdRef.current = null;
+    hasAutoOpenedCodeRef.current = false;
+  }, []);
+
+  const handleLoadSession = useCallback((session: ChatSession) => {
+    setHistory(session.history);
+    setTurnCount(session.turnCount);
+    setLastCode(session.lastCode);
+    setLastVisualSpec(session.lastVisualSpec);
+    setError(null);
+    setInput("");
+    setCurrentSessionId(session.id);
+    sessionIdRef.current = session.id;
+    // Don't auto-open code panel when loading a past session
+    hasAutoOpenedCodeRef.current = true;
   }, []);
 
   const cleanedHistory = useMemo(
@@ -1059,10 +1156,168 @@ Important: update this existing sketch instead of replacing it from scratch.`,
           flex: 1,
           minHeight: 0,
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1.3fr) minmax(0, 1fr)",
+          gridTemplateColumns: `${sidebarOpen ? "180px" : "36px"} minmax(0, 1.3fr) minmax(0, 1fr)`,
+          transition: "grid-template-columns 0.25s ease",
           gap: 24,
         }}
       >
+        {/* Session history sidebar */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            overflowY: sidebarOpen ? "auto" : "hidden",
+            padding: sidebarOpen ? "12px 8px" : "8px 4px",
+            borderRadius: 16,
+            background: "rgba(255, 255, 255, 0.45)",
+            border: "1px solid rgba(140, 120, 100, 0.18)",
+            boxShadow: "0 18px 40px rgba(180, 140, 120, 0.14), 0 0 0 1px rgba(255,255,255,0.45) inset",
+            backdropFilter: "blur(10px)",
+            WebkitBackdropFilter: "blur(10px)",
+            transition: "padding 0.2s ease",
+          }}
+        >
+          {/* Header: label + toggle inline */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: sidebarOpen ? "space-between" : "center",
+              flexShrink: 0,
+              marginBottom: 4,
+              paddingLeft: sidebarOpen ? 4 : 0,
+              transition: "padding-left 0.25s ease",
+            }}
+          >
+            <div
+              style={{
+                maxWidth: sidebarOpen ? "120px" : "0px",
+                overflow: "hidden",
+                opacity: sidebarOpen ? 1 : 0,
+                transition: "max-width 0.3s ease, opacity 0.15s ease",
+                fontSize: 10,
+                fontWeight: 700,
+                color: "#8b6914",
+                letterSpacing: "0.06em",
+                whiteSpace: "nowrap",
+              }}
+            >
+              PAST CHATS
+            </div>
+            <button
+              type="button"
+              title={sidebarOpen ? "Collapse sidebar" : "Expand chat history"}
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 18,
+                color: "#8b6914",
+                padding: "2px 6px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1)",
+                transform: sidebarOpen ? "rotate(0deg)" : "rotate(180deg)",
+              }}
+            >
+              ‹
+            </button>
+          </div>
+
+          {/* Content — always rendered, fades in/out */}
+          <div
+            style={{
+              opacity: sidebarOpen ? 1 : 0,
+              pointerEvents: sidebarOpen ? "auto" : "none",
+              transition: "opacity 0.2s ease",
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+              overflow: "hidden",
+              flex: 1,
+            }}
+          >
+            <button
+              type="button"
+              onClick={handleNewStory}
+              style={{
+                textAlign: "left",
+                padding: "6px 8px",
+                borderRadius: 6,
+                border: "1px solid rgba(184,149,110,0.4)",
+                background: "rgba(255,248,236,0.8)",
+                cursor: "pointer",
+                fontSize: 11,
+                color: "#8b6914",
+                fontWeight: 600,
+                marginBottom: 6,
+                flexShrink: 0,
+              }}
+            >
+              + New Chat
+            </button>
+
+            {sessions.length === 0 && (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "#9a8878",
+                  padding: "4px 6px",
+                  fontStyle: "italic",
+                }}
+              >
+                No saved chats yet
+              </div>
+            )}
+
+            {sessions.map((session) => (
+              <button
+                key={session.id}
+                type="button"
+                onClick={() => handleLoadSession(session)}
+                style={{
+                  textAlign: "left",
+                  padding: "7px 8px",
+                  borderRadius: 6,
+                  border: "1px solid",
+                  borderColor:
+                    session.id === currentSessionId
+                      ? "rgba(184,149,110,0.5)"
+                      : "transparent",
+                  background:
+                    session.id === currentSessionId
+                      ? "rgba(255,248,236,0.9)"
+                      : "transparent",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  color: "#4a4038",
+                  lineHeight: 1.35,
+                  width: "100%",
+                  flexShrink: 0,
+                }}
+              >
+                <div
+                  style={{
+                    fontWeight: 500,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    marginBottom: 2,
+                  }}
+                >
+                  {session.title}
+                </div>
+                <div style={{ color: "#9a8878", fontSize: 10 }}>
+                  {formatRelativeTime(session.timestamp)}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div
             id="fs-leftpanel"
           style={{
@@ -1143,7 +1398,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             }}
           >
             This studio is for generating{" "}
-            <b>abstract, emotional p5.js sketches</b> — think moods and metaphors,
+            <b>abstract, emotional p5.js sketches</b> - think moods and metaphors,
             not literal or photorealistic images.
           </p>
 
