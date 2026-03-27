@@ -41,6 +41,14 @@ interface ChatSession {
   turnCount: number;
 }
 
+type UncertaintyLevel = "low" | "medium" | "high";
+
+interface UncertaintySignal {
+  level: UncertaintyLevel;
+  title: string;
+  message: string;
+}
+
 const SESSIONS_KEY = "feel-sketch-sessions";
 
 function loadSessions(): ChatSession[] {
@@ -387,6 +395,164 @@ function sanitizeHtml(text: string): string {
   );
 }
 
+function formatAssistantMarkdownToHtml(text: string): string {
+  const applyInlineMarkdown = (value: string): string => {
+    let out = value;
+    // Bold first, then italic for nested emphasis like **... *...* ...**
+    out = out.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    out = out.replace(/\*(.+?)\*/g, "<em>$1</em>");
+    return out;
+  };
+
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const rendered: string[] = [];
+  let listBuffer: string[] = [];
+  let paragraphBuffer: string[] = [];
+
+  const flushList = () => {
+    if (listBuffer.length === 0) return;
+    rendered.push(`<ul>${listBuffer.join("")}</ul>`);
+    listBuffer = [];
+  };
+
+  const flushParagraph = () => {
+    if (paragraphBuffer.length === 0) return;
+    rendered.push(`<p>${paragraphBuffer.join("<br />")}</p>`);
+    paragraphBuffer = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      flushList();
+      flushParagraph();
+      continue;
+    }
+
+    if (/^---+$/.test(line)) {
+      flushList();
+      flushParagraph();
+      rendered.push("<hr />");
+      continue;
+    }
+
+    const h3 = line.match(/^###\s+(.+)$/);
+    if (h3) {
+      flushList();
+      flushParagraph();
+      rendered.push(`<h3>${applyInlineMarkdown(h3[1])}</h3>`);
+      continue;
+    }
+
+    const h2 = line.match(/^##\s+(.+)$/);
+    if (h2) {
+      flushList();
+      flushParagraph();
+      rendered.push(`<h2>${applyInlineMarkdown(h2[1])}</h2>`);
+      continue;
+    }
+
+    const h1 = line.match(/^#\s+(.+)$/);
+    if (h1) {
+      flushList();
+      flushParagraph();
+      rendered.push(`<h1>${applyInlineMarkdown(h1[1])}</h1>`);
+      continue;
+    }
+
+    const bullet = line.match(/^[•*-]\s+(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      listBuffer.push(`<li>${applyInlineMarkdown(bullet[1])}</li>`);
+      continue;
+    }
+
+    flushList();
+    paragraphBuffer.push(applyInlineMarkdown(line));
+  }
+
+  flushList();
+  flushParagraph();
+
+  return rendered.join("");
+}
+
+function detectUncertaintySignals(
+  text: string,
+  turnCount: number,
+  hasExistingCode: boolean
+): UncertaintySignal[] {
+  const trimmed = text.trim();
+  const lowered = trimmed.toLowerCase();
+  const signals: UncertaintySignal[] = [];
+
+  if (trimmed.length > 340) {
+    signals.push({
+      level: "medium",
+      title: "Long prompt",
+      message:
+        "Long descriptions can make the first result less focused. Start broad, then refine in small steps.",
+    });
+  }
+
+  if (
+    /(photoreal|realistic|portrait|face|character|exactly|identical|copy|logo|text on image)/i.test(
+      lowered
+    )
+  ) {
+    signals.push({
+      level: "high",
+      title: "Style mismatch risk",
+      message:
+        "This request may conflict with the app's abstract style and can produce unexpected outputs.",
+    });
+  }
+
+  if (
+    /(complex|many|everything|all at once|and also|plus|multiple scenes|detailed story)/i.test(
+      lowered
+    )
+  ) {
+    signals.push({
+      level: "medium",
+      title: "High complexity",
+      message:
+        "Packed prompts are more error-prone. Try one core mood first, then add details iteratively.",
+    });
+  }
+
+  if (
+    /(bug|break|invalid|error|undefined|null|crash|throw|fail|broken code)/i.test(
+      lowered
+    )
+  ) {
+    signals.push({
+      level: "high",
+      title: "Code instability risk",
+      message:
+        "Requests involving broken behavior are likely to generate code that needs manual fixes.",
+    });
+  }
+
+  if (turnCount >= 2 && hasExistingCode && trimmed.length > 220) {
+    signals.push({
+      level: "medium",
+      title: "Refinement drift risk",
+      message:
+        "Large refinement requests can overwrite working parts. Smaller edits are usually more reliable.",
+    });
+  }
+
+  return signals;
+}
+
+function highestSignalLevel(signals: UncertaintySignal[]): UncertaintyLevel {
+  if (signals.some((s) => s.level === "high")) return "high";
+  if (signals.some((s) => s.level === "medium")) return "medium";
+  return "low";
+}
+
 function buildGenerationMessages(
   history: Message[],
   userText: string,
@@ -485,6 +651,10 @@ export const App: React.FC = () => {
   const [sketchGenerating, setSketchGenerating] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions());
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [activeUncertaintySignals, setActiveUncertaintySignals] = useState<
+    UncertaintySignal[]
+  >([]);
+  const [stageWarning, setStageWarning] = useState<string | null>(null);
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -615,6 +785,20 @@ export const App: React.FC = () => {
                 </figcaption>
               </figure>
             </div>
+            <p
+              style={{
+                margin: "8px 0 0 0",
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "#fff4df",
+                border: "1px solid rgba(190, 135, 50, 0.35)",
+                color: "#6c4a16",
+              }}
+            >
+              <b>Important:</b> these are best-case examples. AI results can be inconsistent,
+              especially with very specific or complex prompts. Watch for uncertainty warnings and
+              refine in smaller steps when they appear.
+            </p>
           </div>
         ),
       },
@@ -848,6 +1032,10 @@ ${lastCode
     const text = input.trim();
     if (!text || loading) return;
 
+    const promptSignals = detectUncertaintySignals(text, turnCount, !!lastCode);
+    setActiveUncertaintySignals(promptSignals);
+    setStageWarning(null);
+
     setInput("");
     setError(null);
     setLoading(true);
@@ -895,6 +1083,9 @@ ${lastCode}
       }).catch(() => { });
 
       if (turnCount === 0) {
+        setStageWarning(
+          "Early-stage interpretation can be noisy. The first sketch may miss intent and need one or two refinements."
+        );
         const newHistory: Message[] = [...history, userMessage];
 
         // Run intake questions AND spec generation in parallel
@@ -925,6 +1116,9 @@ ${lastCode}
         // Now add the intake follow-up questions to chat
         reply = intakeReply;
       } else if (turnCount === 1) {
+        setStageWarning(
+          "This is the first full sketch generation pass. If output feels off, request one focused change at a time."
+        );
         const specHistory: Message[] = [...history, userMessage];
 
         const specReply = await callAnthropicChat("", VISUAL_SPEC_PROMPT, specHistory);
@@ -962,6 +1156,9 @@ ${lastCode}
           setSketchGenerating(false);
         }
       } else {
+        setStageWarning(
+          "Refinements can occasionally regress earlier effects. If that happens, ask to keep specific working parts."
+        );
         const refinementHistory: Message[] = [
           ...history,
           {
@@ -1046,6 +1243,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
       }).catch(() => { });
     } finally {
       setLoading(false);
+      setStageWarning(null);
       setTimeout(scrollToBottom, 0);
     }
   }, [history, input, lastCode, lastVisualSpec, loading, scrollToBottom, turnCount]);
@@ -1057,6 +1255,8 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setLastVisualSpec(null);
     setError(null);
     setInput("");
+    setActiveUncertaintySignals([]);
+    setStageWarning(null);
     setCurrentSessionId(null);
     sessionIdRef.current = null;
     hasAutoOpenedCodeRef.current = false;
@@ -1069,6 +1269,8 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setLastVisualSpec(session.lastVisualSpec);
     setError(null);
     setInput("");
+    setActiveUncertaintySignals([]);
+    setStageWarning(null);
     setCurrentSessionId(session.id);
     sessionIdRef.current = session.id;
     // Don't auto-open code panel when loading a past session
@@ -1090,7 +1292,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
               /```[\w]*\s*\r?\n[\s\S]*/g,
               "<em>[sketch was cut off — please try again]</em>"
             );
-          return { ...m, content: clean };
+          return { ...m, content: formatAssistantMarkdownToHtml(clean) };
         }
         const clean = m.content.replace(
           /\[Current sketch to build on:\]\s*```[\w]*\s*\r?\n[\s\S]*?```/g,
@@ -1100,6 +1302,15 @@ Important: update this existing sketch instead of replacing it from scratch.`,
       }),
     [history]
   );
+
+  const liveInputSignals = useMemo(
+    () => detectUncertaintySignals(input, turnCount, !!lastCode),
+    [input, turnCount, lastCode]
+  );
+  const combinedSignals = activeUncertaintySignals.length > 0
+    ? activeUncertaintySignals
+    : liveInputSignals;
+  const uncertaintyLevel = highestSignalLevel(combinedSignals);
 
   return (
     <div
@@ -1421,6 +1632,57 @@ Important: update this existing sketch instead of replacing it from scratch.`,
               <br />
               <br />
               Please click <b>"New Chat 🔄"</b> to restart the sketch.
+            </div>
+          )}
+
+          {(combinedSignals.length > 0 || stageWarning) && (
+            <div
+              style={{
+                marginBottom: 8,
+                borderRadius: 8,
+                padding: "8px 10px",
+                fontSize: 12,
+                lineHeight: 1.4,
+                background:
+                  uncertaintyLevel === "high"
+                    ? "#4a171b"
+                    : uncertaintyLevel === "medium"
+                      ? "#fff4df"
+                      : "#eef7ff",
+                border:
+                  uncertaintyLevel === "high"
+                    ? "1px solid #8a2d34"
+                    : uncertaintyLevel === "medium"
+                      ? "1px solid rgba(190, 135, 50, 0.45)"
+                      : "1px solid rgba(90, 130, 170, 0.45)",
+                color:
+                  uncertaintyLevel === "high"
+                    ? "#ffd6dc"
+                    : uncertaintyLevel === "medium"
+                      ? "#6c4a16"
+                      : "#2d5678",
+              }}
+            >
+              <b>Uncertainty cue:</b>{" "}
+              {uncertaintyLevel === "high"
+                ? "high chance of unexpected results."
+                : uncertaintyLevel === "medium"
+                  ? "some risk of unexpected results."
+                  : "low risk right now."}
+              {combinedSignals.length > 0 && (
+                <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                  {combinedSignals.map((signal, idx) => (
+                    <li key={`${signal.title}-${idx}`}>
+                      <b>{signal.title}:</b> {signal.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {stageWarning && (
+                <div style={{ marginTop: 6 }}>
+                  <b>Current step:</b> {stageWarning}
+                </div>
+              )}
             </div>
           )}
 
@@ -1872,6 +2134,21 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                 follow‑up questions, then turn it into an{" "}
                 <b>abstract, emotional p5.js sketch</b> instead of a literal illustration.
               </p>
+
+              <div
+                style={{
+                  margin: "0 0 10px 0",
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  background: "#fff4df",
+                  border: "1px solid rgba(190, 135, 50, 0.35)",
+                  color: "#6c4a16",
+                }}
+              >
+                <b>What can go wrong:</b> highly specific, literal, or multi-part prompts are more
+                likely to produce odd results. If that happens, break your request into smaller
+                edits and preserve the parts you like.
+              </div>
 
               <p style={{ margin: "0 0 8px 0" }}>
                 Under the live preview on the right you&apos;ll always see two collapsible panels:
