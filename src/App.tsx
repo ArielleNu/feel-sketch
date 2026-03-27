@@ -649,6 +649,7 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [sketchProgress, setSketchProgress] = useState(0);
   const [sketchGenerating, setSketchGenerating] = useState(false);
+  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions());
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [activeUncertaintySignals, setActiveUncertaintySignals] = useState<
@@ -659,6 +660,7 @@ export const App: React.FC = () => {
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const hasAutoOpenedCodeRef = useRef(false);
+  const suppressAutosaveUntilNextPromptRef = useRef(false);
 
   const tourSteps: Step[] = useMemo(
     () => [
@@ -846,6 +848,7 @@ export const App: React.FC = () => {
   // Auto-save current session to localStorage whenever conversation state changes
   useEffect(() => {
     if (history.length === 0) return;
+    if (suppressAutosaveUntilNextPromptRef.current) return;
 
     let sid = sessionIdRef.current;
     if (!sid) {
@@ -1031,6 +1034,17 @@ ${lastCode
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text || loading) return;
+    suppressAutosaveUntilNextPromptRef.current = false;
+
+    // Associate this request with the currently active session so loading UI
+    // doesn't appear if the user switches to another chat while waiting.
+    let requestSessionId = sessionIdRef.current;
+    if (!requestSessionId) {
+      requestSessionId = generateId();
+      sessionIdRef.current = requestSessionId;
+      setCurrentSessionId(requestSessionId);
+    }
+    setLoadingSessionId(requestSessionId);
 
     const promptSignals = detectUncertaintySignals(text, turnCount, !!lastCode);
     setActiveUncertaintySignals(promptSignals);
@@ -1243,6 +1257,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
       }).catch(() => { });
     } finally {
       setLoading(false);
+      setLoadingSessionId(null);
       setStageWarning(null);
       setTimeout(scrollToBottom, 0);
     }
@@ -1257,12 +1272,16 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setInput("");
     setActiveUncertaintySignals([]);
     setStageWarning(null);
+    setLoadingSessionId(null);
     setCurrentSessionId(null);
     sessionIdRef.current = null;
     hasAutoOpenedCodeRef.current = false;
   }, []);
 
   const handleLoadSession = useCallback((session: ChatSession) => {
+    // Loading an old chat should not update its "last edited" timestamp/order.
+    // We only resume autosave when the user sends a new prompt in that session.
+    suppressAutosaveUntilNextPromptRef.current = true;
     setHistory(session.history);
     setTurnCount(session.turnCount);
     setLastCode(session.lastCode);
@@ -1311,6 +1330,8 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     ? activeUncertaintySignals
     : liveInputSignals;
   const uncertaintyLevel = highestSignalLevel(combinedSignals);
+  const showLoadingForCurrentSession =
+    loading && !!currentSessionId && currentSessionId === loadingSessionId;
 
   return (
     <div
@@ -1735,7 +1756,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
               </div>
             ))}
 
-            {loading && (
+            {showLoadingForCurrentSession && (
               <div style={{ color: "#6b6156", fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
                 <span style={{
                   display: "inline-block",
