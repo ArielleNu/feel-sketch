@@ -676,7 +676,14 @@ export const App: React.FC = () => {
         placement: "bottom",
         title: "What you’re making",
         content:
-          "Feel Sketch turns an emotion or memory into a p5.js sketch, and shows the result live on the right.",
+          "Feel Sketch turns an emotion into a p5.js sketch, and shows the result live on the right.",
+      },
+      {
+        target: "#fs-history-panel",
+        placement: "right",
+        title: "Chat history",
+        content:
+          "Use this panel to start a new chat and reopen older chats. Click any previous chat to load it and continue from there.",
       },
       {
         target: "#fs-chat",
@@ -697,7 +704,21 @@ export const App: React.FC = () => {
         placement: "top",
         title: "Actions",
         content:
-          "Send creates the next message. New Chat resets everything and starts fresh.",
+          "Send creates the next message. New Chat clears the current canvas and conversation only.",
+      },
+      {
+        target: "#fs-reset-history",
+        placement: "right",
+        title: "Reset all chat history",
+        content:
+          "Use Reset History to delete all saved past chats from this browser and start from a completely clean history.",
+      },
+      {
+        target: "body",
+        placement: "center",
+        title: "Uncertainty cues",
+        content:
+          "You may see uncertainty warnings when prompts are long, too literal for the abstract style, overly complex, or request broken/error behavior. To improve reliability, keep prompts focused on one mood, refine in small steps, and ask to preserve parts you already like.",
       },
       {
         target: "#fs-sketch",
@@ -917,6 +938,13 @@ export const App: React.FC = () => {
     []
   );
 
+  const handleRestartWalkthrough = useCallback(() => {
+    setShowHelp(false);
+    setRunTour(false);
+    // Toggle run so Joyride reliably starts from step 1 again.
+    setTimeout(() => setRunTour(true), 0);
+  }, []);
+
   const iframeSrcDoc = useMemo(() => {
     if (!lastCode) return "";
 
@@ -1100,35 +1128,37 @@ ${lastCode}
         setStageWarning(
           "Early-stage interpretation can be noisy. The first sketch may miss intent and need one or two refinements."
         );
-        const newHistory: Message[] = [...history, userMessage];
-
-        // Run intake questions AND spec generation in parallel
-        const [intakeReply, specReply] = await Promise.all([
-          callAnthropicChat("", INTAKE_PROMPT, newHistory),
-          callAnthropicChat("", VISUAL_SPEC_PROMPT, newHistory),
-        ]);
-
-        // Generate the sketch and wait for it to finish before showing chat
-        const parsedSpec = parseVisualSpec(specReply);
-        if (parsedSpec) {
-          setLastVisualSpec(parsedSpec);
-          const generationHistory = buildGenerationMessages(history, text, parsedSpec);
-          setSketchGenerating(true);
+        setSketchGenerating(true);
         try {
-          const codeReply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
-          const code = extractCode(codeReply);
-          if (code && looksLikeRunnableP5(code)) {
-            setSketchProgress(100);
-            setLastCode(code);
-          } else console.warn("Code extracted but failed p5 check:", codeReply.slice(0, 200));
-        } catch (err) {
-          console.error("Sketch generation failed:", err);
+          const newHistory: Message[] = [...history, userMessage];
+
+          // Run intake questions AND spec generation in parallel
+          const [intakeReply, specReply] = await Promise.all([
+            callAnthropicChat("", INTAKE_PROMPT, newHistory),
+            callAnthropicChat("", VISUAL_SPEC_PROMPT, newHistory),
+          ]);
+
+          // Generate the sketch and wait for it to finish before showing chat
+          const parsedSpec = parseVisualSpec(specReply);
+          if (parsedSpec) {
+            setLastVisualSpec(parsedSpec);
+            const generationHistory = buildGenerationMessages(history, text, parsedSpec);
+            try {
+              const codeReply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
+              const code = extractCode(codeReply);
+              if (code && looksLikeRunnableP5(code)) {
+                setSketchProgress(100);
+                setLastCode(code);
+              } else console.warn("Code extracted but failed p5 check:", codeReply.slice(0, 200));
+            } catch (err) {
+              console.error("Sketch generation failed:", err);
+            }
+          }
+          // Now add the intake follow-up questions to chat
+          reply = intakeReply;
         } finally {
           setSketchGenerating(false);
         }
-      }
-        // Now add the intake follow-up questions to chat
-        reply = intakeReply;
       } else if (turnCount === 1) {
         setStageWarning(
           "This is the first full sketch generation pass. If output feels off, request one focused change at a time."
@@ -1191,8 +1221,13 @@ ${lastCode ?? ""}
 Important: update this existing sketch instead of replacing it from scratch.`,
           },
         ];
-
-        reply = await callAnthropicChat("", REFINEMENT_PROMPT, refinementHistory);
+        setSketchGenerating(true);
+        try {
+          reply = await callAnthropicChat("", REFINEMENT_PROMPT, refinementHistory);
+          setSketchProgress(100);
+        } finally {
+          setSketchGenerating(false);
+        }
       }
 
       setHistory((prev) => [...prev, { role: "assistant", content: reply }]);
@@ -1401,6 +1436,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
       >
         {/* Session history sidebar */}
         <div
+          id="fs-history-panel"
           style={{
             display: "flex",
             flexDirection: "column",
@@ -1479,6 +1515,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             }}
           >
             <button
+              id="fs-sidebar-new-chat"
               type="button"
               onClick={handleNewStory}
               style={{
@@ -1555,6 +1592,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             ))}
 
             <button
+              id="fs-reset-history"
               type="button"
               onClick={handleResetChatHistory}
               disabled={loading}
@@ -2160,21 +2198,39 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                 >
                   How to use Feel Sketch
                 </h2>
-                <button
-                  type="button"
-                  onClick={() => setShowHelp(false)}
-                  aria-label="Close help"
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    color: "#6b6156",
-                    fontSize: 18,
-                    cursor: "pointer",
-                    padding: 4,
-                  }}
-                >
-                  ×
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={handleRestartWalkthrough}
+                    style={{
+                      border: "1px solid rgba(184,149,110,0.45)",
+                      background: "rgba(255,248,236,0.9)",
+                      color: "#8b6914",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      borderRadius: 999,
+                      padding: "5px 10px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Restart walkthrough
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowHelp(false)}
+                    aria-label="Close help"
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: "#6b6156",
+                      fontSize: 18,
+                      cursor: "pointer",
+                      padding: 4,
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
 
               <p style={{ margin: "4px 0 10px" }}>
