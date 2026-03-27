@@ -1278,6 +1278,12 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     hasAutoOpenedCodeRef.current = false;
   }, []);
 
+  const handleResetChatHistory = useCallback(() => {
+    handleNewStory();
+    setSessions([]);
+    saveSessions([]);
+  }, [handleNewStory]);
+
   const handleLoadSession = useCallback((session: ChatSession) => {
     // Loading an old chat should not update its "last edited" timestamp/order.
     // We only resume autosave when the user sends a new prompt in that session.
@@ -1547,6 +1553,27 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                 </div>
               </button>
             ))}
+
+            <button
+              type="button"
+              onClick={handleResetChatHistory}
+              disabled={loading}
+              style={{
+                textAlign: "center",
+                padding: "6px 8px",
+                borderRadius: 6,
+                border: "1px solid rgba(184,149,110,0.4)",
+                background: "rgba(255,248,236,0.8)",
+                cursor: loading ? "default" : "pointer",
+                fontSize: 11,
+                color: "#8b6914",
+                fontWeight: 600,
+                marginTop: "auto",
+                flexShrink: 0,
+              }}
+            >
+              Reset History
+            </button>
           </div>
         </div>
 
@@ -1829,7 +1856,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
                 cursor: loading ? "default" : "pointer",
               }}
             >
-              New Chat 🔄
+              + New Chat
             </button>
           </div>
         </div>
