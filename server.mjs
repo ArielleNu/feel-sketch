@@ -32,7 +32,7 @@ app.post("/api/chat", async (req, res) => {
     const response = await client.messages.create({
       // Use a widely-available legacy model ID.
       model: "claude-haiku-4-5-20251001", //claude-haiku-4-5-20251001 best mix of sonnet + haiku
-      max_tokens: 8192,
+      max_tokens: 64000,
       system,
       messages,
     });
