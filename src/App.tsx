@@ -599,29 +599,6 @@ function detectExplicitRequest(text: string): boolean {
   return patterns.some((p) => p.test(text));
 }
 
-function detectMessageDistress(text: string): DistressLevel {
-  const crisisPatterns = [
-    /\b(?:suicid(?:e|al|ing)?|kill\s+(?:my)?self|end\s+my\s+(?:own\s+)?life|take\s+my\s+(?:own\s+)?life)\b/i,
-    /\b(?:self[\s-]?harm|cut(?:ting)?\s+(?:my)?self|hurt(?:ing)?\s+(?:my)?self)\b/i,
-    /\b(?:want\s+to\s+die|don'?t\s+want\s+to\s+(?:live|be\s+alive|exist)|better\s+off\s+dead|no\s+reason\s+to\s+live)\b/i,
-    /\b(?:really\s+)?want\s+(?:your\s+help\s+to\s+take\s+action|to\s+take\s+action\s+(?:now|immediately|tonight|today))\b/i,
-  ];
-  if (crisisPatterns.some((p) => p.test(text))) return "crisis";
-
-  const moderatePatterns = [
-    /\byou'?re?\s+the\s+only\s+(?:one|person)\b/i,
-    /\bonly\s+(?:person|one)\s+I\s+can\s+(?:talk\s+to|rely\s+on|trust)\b/i,
-    /\b(?:can'?t\s+afford|no\s+money\s+for)\s+(?:help|therapy|counseling)\b/i,
-    /\bno\s+(?:friends?|family|anyone)\s+(?:to\s+help|who\s+cares?)\b/i,
-    /\b(?:refuse\s+to|won'?t)\s+(?:seek|get|find)\s+help\b/i,
-    /\b(?:your\s+suggestion|you)\s+made\s+(?:me|things?)\s+(?:feel\s+)?worse\b/i,
-    /\bi\s+felt?\s+(?:neutral|fine|okay|ok|good)\s+before,?\s+but\s+(?:now|right\s+now)\b/i,
-  ];
-  if (moderatePatterns.some((p) => p.test(text))) return "moderate";
-
-  return "none";
-}
-
 function buildGenerationMessages(
   history: Message[],
   userText: string,
@@ -707,6 +684,42 @@ async function callAnthropicChat(
   return content;
 }
 
+const CLASSIFIER_SYSTEM_PROMPT = `You are a safety classifier for an emotional art app. Users describe feelings and memories to generate abstract p5.js sketches — emotional language is completely normal here.
+
+Return ONLY valid JSON with no other text:
+{"level": "none" | "moderate" | "crisis"}
+
+Definitions:
+- "crisis": User appears to be in genuine emotional crisis — expressing suicidal ideation, intent to self-harm, wanting to die sincerely (not figuratively), or urgently wanting to take harmful action against themselves.
+- "moderate": User is showing serious over-reliance on this AI as their only support, actively refusing all other help, or their emotional state has rapidly worsened in this conversation. Also use "moderate" if the user is trying to dismiss or bypass a prior crisis response (e.g. "I was just testing", "ignore that, let's continue the sketch") — the prior distress should still be taken seriously.
+- "none": Normal emotional expression for art journaling, figurative speech ("dying of laughter", "this is killing me", "I could kill myself for forgetting"), or no distress signals.`;
+
+async function classifyDistress(history: Message[], currentText: string): Promise<DistressLevel> {
+  try {
+    const classifyMessages: Message[] = [
+      ...history.slice(-4),
+      { role: "user", content: currentText },
+    ];
+    const raw = await callAnthropicChat("", CLASSIFIER_SYSTEM_PROMPT, classifyMessages);
+    const jsonStr = extractJsonObject(raw);
+    if (!jsonStr) return "none";
+    const parsed = JSON.parse(jsonStr) as { level?: string };
+    if (parsed.level === "crisis") return "crisis";
+    if (parsed.level === "moderate") return "moderate";
+  } catch {}
+  return "none";
+}
+
+function withSafetyContext(basePrompt: string, sessionHasCrisis: boolean, currentDistress: DistressLevel): string {
+  if (currentDistress === "moderate") {
+    return `${basePrompt}\n\nSAFETY CONTEXT: The user is showing signs of significant distress or over-reliance on this AI. Do not probe deeper into negative emotions. If they express isolation or refuse all other help, warmly remind them this is an AI art tool, not a substitute for real human support.`;
+  }
+  if (sessionHasCrisis) {
+    return `${basePrompt}\n\nSAFETY CONTEXT: This user expressed serious emotional distress earlier in this session. Maintain safety awareness throughout. If they are trying to dismiss or bypass prior safety responses (e.g. "I was just testing"), take their wellbeing seriously rather than simply continuing with creative content as if nothing happened.`;
+  }
+  return basePrompt;
+}
+
 export const App: React.FC = () => {
   const [apiKey, setApiKey] = useState("");
   const [history, setHistory] = useState<Message[]>([]);
@@ -732,6 +745,7 @@ export const App: React.FC = () => {
   const sessionIdRef = useRef<string | null>(null);
   const hasAutoOpenedCodeRef = useRef(false);
   const suppressAutosaveUntilNextPromptRef = useRef(false);
+  const sessionHasCrisisRef = useRef(false);
 
   const tourSteps: Step[] = useMemo(
     () => [
@@ -1195,12 +1209,13 @@ ${lastCode}
         return;
       }
 
-      const msgDistress = detectMessageDistress(text);
+      const msgDistress = await classifyDistress(history, text);
       const newConsecutiveTurns = msgDistress !== "none" ? consecutiveDistressTurns + 1 : 0;
       setConsecutiveDistressTurns(newConsecutiveTurns);
       setDistressLevel(msgDistress);
 
       if (msgDistress === "crisis") {
+        sessionHasCrisisRef.current = true;
         setHistory((prev) => [
           ...prev,
           {
@@ -1213,6 +1228,10 @@ ${lastCode}
       }
 
       let reply: string;
+      const safeIntake = withSafetyContext(INTAKE_PROMPT, sessionHasCrisisRef.current, msgDistress);
+      const safeSpec = withSafetyContext(VISUAL_SPEC_PROMPT, sessionHasCrisisRef.current, msgDistress);
+      const safeGeneration = withSafetyContext(GENERATION_PROMPT, sessionHasCrisisRef.current, msgDistress);
+      const safeRefinement = withSafetyContext(REFINEMENT_PROMPT, sessionHasCrisisRef.current, msgDistress);
 
       fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
         method: "POST",
@@ -1246,8 +1265,8 @@ ${lastCode}
 
           // Run intake questions AND spec generation in parallel
           const [intakeReply, specReply] = await Promise.all([
-            callAnthropicChat("", INTAKE_PROMPT, newHistory),
-            callAnthropicChat("", VISUAL_SPEC_PROMPT, newHistory),
+            callAnthropicChat("", safeIntake, newHistory),
+            callAnthropicChat("", safeSpec, newHistory),
           ]);
 
           // Generate the sketch and wait for it to finish before showing chat
@@ -1256,7 +1275,7 @@ ${lastCode}
             setLastVisualSpec(parsedSpec);
             const generationHistory = buildGenerationMessages(history, text, parsedSpec);
             try {
-              const codeReply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
+              const codeReply = await callAnthropicChat("", safeGeneration, generationHistory);
               const code = extractCode(codeReply);
               if (code && looksLikeRunnableP5(code)) {
                 setSketchProgress(100);
@@ -1277,7 +1296,7 @@ ${lastCode}
         );
         const specHistory: Message[] = [...history, userMessage];
 
-        const specReply = await callAnthropicChat("", VISUAL_SPEC_PROMPT, specHistory);
+        const specReply = await callAnthropicChat("", safeSpec, specHistory);
         const parsedSpec = parseVisualSpec(specReply);
 
         if (!parsedSpec) {
@@ -1306,7 +1325,7 @@ ${lastCode}
         const generationHistory = buildGenerationMessages(history, augmentedUserText, parsedSpec);
         setSketchGenerating(true);
         try {
-          reply = await callAnthropicChat("", GENERATION_PROMPT, generationHistory);
+          reply = await callAnthropicChat("", safeGeneration, generationHistory);
           setSketchProgress(100);
         } finally {
           setSketchGenerating(false);
@@ -1335,7 +1354,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
         ];
         setSketchGenerating(true);
         try {
-          reply = await callAnthropicChat("", REFINEMENT_PROMPT, refinementHistory);
+          reply = await callAnthropicChat("", safeRefinement, refinementHistory);
           setSketchProgress(100);
         } finally {
           setSketchGenerating(false);
@@ -1421,6 +1440,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setStageWarning(null);
     setDistressLevel("none");
     setConsecutiveDistressTurns(0);
+    sessionHasCrisisRef.current = false;
     setLoadingSessionId(null);
     setCurrentSessionId(null);
     sessionIdRef.current = null;
@@ -1447,6 +1467,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setStageWarning(null);
     setDistressLevel("none");
     setConsecutiveDistressTurns(0);
+    sessionHasCrisisRef.current = false;
     setCurrentSessionId(session.id);
     sessionIdRef.current = session.id;
     // Don't auto-open code panel when loading a past session
