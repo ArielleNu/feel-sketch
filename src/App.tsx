@@ -613,11 +613,20 @@ function buildGenerationMessages(
   ];
 }
 
+interface ChatApiResult {
+  text: string;
+  safetyBlocked?: boolean;
+  safetyType?: string;
+  escalation?: "standard" | "stern_warning" | "rate_limited";
+  blockedCount?: number;
+}
+
 async function callAnthropicChat(
   apiKey: string,
   systemPrompt: string,
-  history: Message[]
-): Promise<string> {
+  history: Message[],
+  sessionId?: string | null
+): Promise<ChatApiResult> {
   fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
     method: "POST",
     headers: {
@@ -647,6 +656,7 @@ async function callAnthropicChat(
     body: JSON.stringify({
       system: systemPrompt,
       messages: history,
+      sessionId: sessionId ?? undefined,
     }),
   });
 
@@ -681,7 +691,13 @@ async function callAnthropicChat(
     throw new Error("Unexpected API response shape");
   }
 
-  return content;
+  return {
+    text: content,
+    safetyBlocked: json?.safetyBlocked === true,
+    safetyType: typeof json?.safetyType === "string" ? json.safetyType : undefined,
+    escalation: json?.escalation,
+    blockedCount: typeof json?.blockedCount === "number" ? json.blockedCount : undefined,
+  };
 }
 
 const CLASSIFIER_SYSTEM_PROMPT = `You are a safety classifier for an emotional art app. Users describe feelings and memories to generate abstract p5.js sketches — emotional language is completely normal here.
@@ -700,14 +716,89 @@ async function classifyDistress(history: Message[], currentText: string): Promis
       ...history.slice(-4),
       { role: "user", content: currentText },
     ];
-    const raw = await callAnthropicChat("", CLASSIFIER_SYSTEM_PROMPT, classifyMessages);
-    const jsonStr = extractJsonObject(raw);
+    const result = await callAnthropicChat("", CLASSIFIER_SYSTEM_PROMPT, classifyMessages);
+    const jsonStr = extractJsonObject(result.text);
     if (!jsonStr) return "none";
     const parsed = JSON.parse(jsonStr) as { level?: string };
     if (parsed.level === "crisis") return "crisis";
     if (parsed.level === "moderate") return "moderate";
   } catch {}
   return "none";
+}
+
+const GROUNDING_PROMPT = `You are a calm, gentle AI creative companion. The user has indicated that previous reflective questioning was making them feel worse. Your behavior changes accordingly:
+
+- DO NOT ask any introspective or follow-up questions about their feelings.
+- DO NOT probe deeper into negative emotions or ask "why" or "tell me more about" anything emotional.
+- Acknowledge their feelings briefly and warmly in 1–2 sentences.
+- Offer ONE concrete, low-pressure next step the user can choose: a calmer sketch direction (e.g. "want to try something with soft blues and slow motion?"), a grounding suggestion (notice 3 things in the room, take a breath), or simply continuing later.
+- Mention once, gently, that real human support exists: 988 Suicide & Crisis Lifeline (call or text 988); Crisis Text Line (text HOME to 741741). Do not repeat these resources in every reply.
+- Do not generate code in this message. Do not generate a sketch.
+- Keep the response short — under 80 words.
+- Never imply you are a therapist or that you can replace human support.`;
+
+const DISTRESS_HISTORY_KEY = "feel-sketch-distress-history";
+const DISTRESS_BANNER_DISMISS_KEY = "feel-sketch-distress-banner-dismissed-at";
+
+interface DistressHistoryEntry {
+  sessionId: string;
+  level: DistressLevel;
+  timestamp: number;
+}
+
+function loadDistressHistory(): DistressHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(DISTRESS_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDistressHistory(entries: DistressHistoryEntry[]): void {
+  try {
+    localStorage.setItem(DISTRESS_HISTORY_KEY, JSON.stringify(entries));
+  } catch {}
+}
+
+function recordDistressEvent(sessionId: string, level: DistressLevel): DistressHistoryEntry[] {
+  if (level === "none") return loadDistressHistory();
+  const history = loadDistressHistory();
+  // Only record once per session per level escalation.
+  const alreadyAtOrAbove = history.some(
+    (e) => e.sessionId === sessionId && rankDistress(e.level) >= rankDistress(level)
+  );
+  if (alreadyAtOrAbove) return history;
+  const next = [...history, { sessionId, level, timestamp: Date.now() }].slice(-50);
+  saveDistressHistory(next);
+  return next;
+}
+
+function rankDistress(level: DistressLevel): number {
+  return level === "crisis" ? 2 : level === "moderate" ? 1 : 0;
+}
+
+function shouldShowCrossSessionInterstitial(history: DistressHistoryEntry[]): boolean {
+  const sevenDays = 1000 * 60 * 60 * 24 * 7;
+  const cutoff = Date.now() - sevenDays;
+  const recent = history.filter((e) => e.timestamp >= cutoff && e.level !== "none");
+  if (recent.length < 3) return false;
+  // Don't re-show if dismissed within the last 24 hours.
+  try {
+    const dismissedAt = Number(localStorage.getItem(DISTRESS_BANNER_DISMISS_KEY));
+    if (Number.isFinite(dismissedAt) && Date.now() - dismissedAt < 1000 * 60 * 60 * 24) {
+      return false;
+    }
+  } catch {}
+  return true;
+}
+
+function dismissCrossSessionInterstitial(): void {
+  try {
+    localStorage.setItem(DISTRESS_BANNER_DISMISS_KEY, String(Date.now()));
+  } catch {}
 }
 
 function withSafetyContext(basePrompt: string, sessionHasCrisis: boolean, currentDistress: DistressLevel): string {
@@ -740,6 +831,9 @@ export const App: React.FC = () => {
   const [stageWarning, setStageWarning] = useState<string | null>(null);
   const [distressLevel, setDistressLevel] = useState<DistressLevel>("none");
   const [consecutiveDistressTurns, setConsecutiveDistressTurns] = useState(0);
+  const [groundingMode, setGroundingMode] = useState(false);
+  const [showCrossSessionBanner, setShowCrossSessionBanner] = useState(false);
+  const [sessionEnded, setSessionEnded] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -941,6 +1035,12 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     setRunTour(true);
+  }, []);
+
+  useEffect(() => {
+    if (shouldShowCrossSessionInterstitial(loadDistressHistory())) {
+      setShowCrossSessionBanner(true);
+    }
   }, []);
 
   // Auto-open code panel on first sketch generation
@@ -1146,7 +1246,7 @@ ${lastCode
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || sessionEnded) return;
     suppressAutosaveUntilNextPromptRef.current = false;
 
     // Associate this request with the currently active session so loading UI
@@ -1214,8 +1314,13 @@ ${lastCode}
       setConsecutiveDistressTurns(newConsecutiveTurns);
       setDistressLevel(msgDistress);
 
+      if (msgDistress !== "none" && requestSessionId) {
+        recordDistressEvent(requestSessionId, msgDistress);
+      }
+
       if (msgDistress === "crisis") {
         sessionHasCrisisRef.current = true;
+        setGroundingMode(true);
         setHistory((prev) => [
           ...prev,
           {
@@ -1228,10 +1333,30 @@ ${lastCode}
       }
 
       let reply: string;
-      const safeIntake = withSafetyContext(INTAKE_PROMPT, sessionHasCrisisRef.current, msgDistress);
+      const intakeBase = groundingMode ? GROUNDING_PROMPT : INTAKE_PROMPT;
+      const refinementBase = groundingMode ? GROUNDING_PROMPT : REFINEMENT_PROMPT;
+      const safeIntake = withSafetyContext(intakeBase, sessionHasCrisisRef.current, msgDistress);
       const safeSpec = withSafetyContext(VISUAL_SPEC_PROMPT, sessionHasCrisisRef.current, msgDistress);
       const safeGeneration = withSafetyContext(GENERATION_PROMPT, sessionHasCrisisRef.current, msgDistress);
-      const safeRefinement = withSafetyContext(REFINEMENT_PROMPT, sessionHasCrisisRef.current, msgDistress);
+      const safeRefinement = withSafetyContext(refinementBase, sessionHasCrisisRef.current, msgDistress);
+      const sid = sessionIdRef.current;
+
+      const handleServerSafetyBlock = (
+        result: ChatApiResult,
+        appendToHistory: boolean = true
+      ): boolean => {
+        if (!result.safetyBlocked) return false;
+        if (appendToHistory) {
+          setHistory((prev) => [
+            ...prev,
+            { role: "assistant", content: result.text },
+          ]);
+        }
+        if (result.escalation === "rate_limited") {
+          setSessionEnded(true);
+        }
+        return true;
+      };
 
       fetch("http://127.0.0.1:7419/ingest/6121d756-32b3-423e-87d7-670bb64d7396", {
         method: "POST",
@@ -1264,29 +1389,47 @@ ${lastCode}
           const newHistory: Message[] = [...history, userMessage];
 
           // Run intake questions AND spec generation in parallel
-          const [intakeReply, specReply] = await Promise.all([
-            callAnthropicChat("", safeIntake, newHistory),
-            callAnthropicChat("", safeSpec, newHistory),
+          const [intakeResult, specResult] = await Promise.all([
+            callAnthropicChat("", safeIntake, newHistory, sid),
+            callAnthropicChat("", safeSpec, newHistory, sid),
           ]);
 
-          // Generate the sketch and wait for it to finish before showing chat
-          const parsedSpec = parseVisualSpec(specReply);
-          if (parsedSpec) {
-            setLastVisualSpec(parsedSpec);
-            const generationHistory = buildGenerationMessages(history, text, parsedSpec);
-            try {
-              const codeReply = await callAnthropicChat("", safeGeneration, generationHistory);
-              const code = extractCode(codeReply);
-              if (code && looksLikeRunnableP5(code)) {
-                setSketchProgress(100);
-                setLastCode(code);
-              } else console.warn("Code extracted but failed p5 check:", codeReply.slice(0, 200));
-            } catch (err) {
-              console.error("Sketch generation failed:", err);
-            }
+          if (handleServerSafetyBlock(intakeResult)) {
+            return;
           }
-          // Now add the intake follow-up questions to chat
-          reply = intakeReply;
+          if (specResult.safetyBlocked) {
+            // Spec was blocked but intake was fine — still show intake reply,
+            // but skip code generation entirely.
+            reply = intakeResult.text;
+          } else {
+            const parsedSpec = parseVisualSpec(specResult.text);
+            if (parsedSpec) {
+              setLastVisualSpec(parsedSpec);
+              const generationHistory = buildGenerationMessages(history, text, parsedSpec);
+              try {
+                const codeResult = await callAnthropicChat(
+                  "",
+                  safeGeneration,
+                  generationHistory,
+                  sid
+                );
+                if (!codeResult.safetyBlocked) {
+                  const code = extractCode(codeResult.text);
+                  if (code && looksLikeRunnableP5(code)) {
+                    setSketchProgress(100);
+                    setLastCode(code);
+                  } else
+                    console.warn(
+                      "Code extracted but failed p5 check:",
+                      codeResult.text.slice(0, 200)
+                    );
+                }
+              } catch (err) {
+                console.error("Sketch generation failed:", err);
+              }
+            }
+            reply = intakeResult.text;
+          }
         } finally {
           setSketchGenerating(false);
         }
@@ -1296,8 +1439,11 @@ ${lastCode}
         );
         const specHistory: Message[] = [...history, userMessage];
 
-        const specReply = await callAnthropicChat("", safeSpec, specHistory);
-        const parsedSpec = parseVisualSpec(specReply);
+        const specResult = await callAnthropicChat("", safeSpec, specHistory, sid);
+        if (handleServerSafetyBlock(specResult)) {
+          return;
+        }
+        const parsedSpec = parseVisualSpec(specResult.text);
 
         if (!parsedSpec) {
           throw new Error("Could not parse VisualSpec JSON from model output.");
@@ -1325,7 +1471,16 @@ ${lastCode}
         const generationHistory = buildGenerationMessages(history, augmentedUserText, parsedSpec);
         setSketchGenerating(true);
         try {
-          reply = await callAnthropicChat("", safeGeneration, generationHistory);
+          const generationResult = await callAnthropicChat(
+            "",
+            safeGeneration,
+            generationHistory,
+            sid
+          );
+          if (handleServerSafetyBlock(generationResult)) {
+            return;
+          }
+          reply = generationResult.text;
           setSketchProgress(100);
         } finally {
           setSketchGenerating(false);
@@ -1354,7 +1509,16 @@ Important: update this existing sketch instead of replacing it from scratch.`,
         ];
         setSketchGenerating(true);
         try {
-          reply = await callAnthropicChat("", safeRefinement, refinementHistory);
+          const refinementResult = await callAnthropicChat(
+            "",
+            safeRefinement,
+            refinementHistory,
+            sid
+          );
+          if (handleServerSafetyBlock(refinementResult)) {
+            return;
+          }
+          reply = refinementResult.text;
           setSketchProgress(100);
         } finally {
           setSketchGenerating(false);
@@ -1427,7 +1591,27 @@ Important: update this existing sketch instead of replacing it from scratch.`,
       setStageWarning(null);
       setTimeout(scrollToBottom, 0);
     }
-  }, [consecutiveDistressTurns, history, input, lastCode, lastVisualSpec, loading, scrollToBottom, turnCount]);
+  }, [consecutiveDistressTurns, groundingMode, history, input, lastCode, lastVisualSpec, loading, scrollToBottom, sessionEnded, turnCount]);
+
+  const handleFeelWorse = useCallback(() => {
+    if (groundingMode) return;
+    setGroundingMode(true);
+    setActiveUncertaintySignals([]);
+    setStageWarning(null);
+    setHistory((prev) => [
+      ...prev,
+      {
+        role: "assistant",
+        content:
+          "Thank you for telling me. I'm going to stop asking deeper questions. We can pause, switch to something calmer (soft colors, slow motion), or you can come back later — whatever feels best.\n\nIf any of this feels heavy, real human support is available: **988 Suicide & Crisis Lifeline** (call or text 988), **Crisis Text Line** (text HOME to 741741).",
+      },
+    ]);
+  }, [groundingMode]);
+
+  const handleDismissCrossSessionBanner = useCallback(() => {
+    dismissCrossSessionInterstitial();
+    setShowCrossSessionBanner(false);
+  }, []);
 
   const handleNewStory = useCallback(() => {
     setHistory([]);
@@ -1440,6 +1624,8 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setStageWarning(null);
     setDistressLevel("none");
     setConsecutiveDistressTurns(0);
+    setGroundingMode(false);
+    setSessionEnded(false);
     sessionHasCrisisRef.current = false;
     setLoadingSessionId(null);
     setCurrentSessionId(null);
@@ -1467,6 +1653,8 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setStageWarning(null);
     setDistressLevel("none");
     setConsecutiveDistressTurns(0);
+    setGroundingMode(false);
+    setSessionEnded(false);
     sessionHasCrisisRef.current = false;
     setCurrentSessionId(session.id);
     sessionIdRef.current = session.id;
@@ -1858,6 +2046,88 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             </div>
           )}
 
+          {showCrossSessionBanner && (
+            <div
+              style={{
+                marginBottom: 8,
+                borderRadius: 8,
+                padding: "10px 12px",
+                fontSize: 12,
+                lineHeight: 1.5,
+                background: "#f4ecff",
+                border: "1px solid rgba(140, 110, 200, 0.45)",
+                color: "#3d2a6a",
+                display: "flex",
+                gap: 10,
+                alignItems: "flex-start",
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <b>A note across recent sessions:</b> Feel Sketch has noticed several
+                conversations recently that touched on heavy feelings. This is just an art
+                tool — if things have felt overwhelming lately, real human support is
+                available.
+                <div style={{ marginTop: 4, fontSize: 11, color: "#5a3a8a" }}>
+                  988 Suicide &amp; Crisis Lifeline: call or text 988 &middot; Crisis Text
+                  Line: text HOME to 741741
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleDismissCrossSessionBanner}
+                style={{
+                  border: "1px solid rgba(140, 110, 200, 0.5)",
+                  background: "rgba(255, 255, 255, 0.7)",
+                  borderRadius: 999,
+                  padding: "4px 10px",
+                  fontSize: 11,
+                  color: "#3d2a6a",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {sessionEnded && (
+            <div
+              style={{
+                marginBottom: 8,
+                borderRadius: 8,
+                padding: "8px 10px",
+                fontSize: 12,
+                lineHeight: 1.5,
+                background: "#3b1113",
+                border: "1px solid #7d2226",
+                color: "#f3c9cd",
+              }}
+            >
+              <b>This session has been paused</b> after repeated blocked requests. Click
+              <b> + New Chat</b> to start over with a creative emotional prompt.
+            </div>
+          )}
+
+          {groundingMode && !sessionEnded && (
+            <div
+              style={{
+                marginBottom: 8,
+                borderRadius: 8,
+                padding: "8px 10px",
+                fontSize: 12,
+                lineHeight: 1.5,
+                background: "#eef7ee",
+                border: "1px solid rgba(90, 160, 110, 0.45)",
+                color: "#2d5a3a",
+              }}
+            >
+              <b>Grounding mode is on.</b> The Sketch Guide will stop asking deeper
+              reflective questions and keep things calm. You can start a new chat any
+              time to reset.
+            </div>
+          )}
+
           {(distressLevel === "moderate" || consecutiveDistressTurns >= 2) && (
             <div
               style={{
@@ -2055,6 +2325,30 @@ Important: update this existing sketch instead of replacing it from scratch.`,
               }}
             >
               + New Chat
+            </button>
+            <button
+              type="button"
+              onClick={handleFeelWorse}
+              disabled={loading || groundingMode || history.length === 0}
+              title="Switch to grounding mode — the Sketch Guide will stop asking deeper questions."
+              style={{
+                flex: "0 0 auto",
+                marginLeft: "auto",
+                background: "transparent",
+                color: "#6b5260",
+                border: "1px solid rgba(140, 100, 130, 0.45)",
+                borderRadius: 999,
+                padding: "8px 14px",
+                fontSize: 12,
+                fontWeight: 500,
+                cursor:
+                  loading || groundingMode || history.length === 0
+                    ? "default"
+                    : "pointer",
+                opacity: groundingMode || history.length === 0 ? 0.55 : 1,
+              }}
+            >
+              This is making me feel worse
             </button>
           </div>
         </div>
