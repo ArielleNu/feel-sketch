@@ -31,7 +31,11 @@ const JAILBREAK_PATTERNS = [
 
 // Direct NSFW keyword patterns. Cheap pre-filter.
 const EXPLICIT_CONTENT_PATTERNS = [
-  /\b(?:nude|naked|nudity|topless|bottomless)\b/i,
+  /\b(?:nude|nudity|topless)\b/i,
+  // "naked" only when not part of common idioms like "naked truth / eye / ambition"
+  /\bnaked\b(?!\s+(?:truth|eye|ambition|fact|reality))/i,
+  // "bottomless" only when not describing an emotion/void (e.g. "bottomless pit of grief")
+  /\bbottomless\b(?!\s+(?:pit|void|abyss|chasm|despair|grief|sadness|well|cup|brunch))/i,
   /\b(?:pornograph|erotic|sexually?\s+explicit|nsfw|adult\s+content)\b/i,
   /\b(?:genitali[a]?|genitals?|penis|vagina)\b/i,
   /\bundress\b|\bwithout\s+(?:any\s+)?clothes\b|\bremove\s+(?:their\s+)?clothing\b/i,

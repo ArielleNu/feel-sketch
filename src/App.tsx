@@ -517,7 +517,11 @@ function detectJailbreakAttempt(text: string): boolean {
 
 function detectExplicitRequest(text: string): boolean {
   const patterns = [
-    /\b(?:nude|naked|nudity|topless|bottomless)\b/i,
+    /\b(?:nude|nudity|topless)\b/i,
+    // "naked" only when not part of common idioms like "naked truth / eye / ambition"
+    /\bnaked\b(?!\s+(?:truth|eye|ambition|fact|reality))/i,
+    // "bottomless" only when not describing an emotion/void (e.g. "bottomless pit of grief")
+    /\bbottomless\b(?!\s+(?:pit|void|abyss|chasm|despair|grief|sadness|well|cup|brunch))/i,
     /\b(?:pornograph|erotic|sexually?\s+explicit|nsfw|adult\s+content)\b/i,
     /\b(?:genitali[a]?|genitals?|penis|vagina)\b/i,
     /\bundress\b|\bwithout\s+(?:any\s+)?clothes\b|\bremove\s+(?:their\s+)?clothing\b/i,
@@ -596,9 +600,24 @@ Return ONLY valid JSON with no other text:
 {"level": "none" | "moderate" | "crisis"}
 
 Definitions:
-- "crisis": User appears to be in genuine emotional crisis — expressing suicidal ideation, intent to self-harm, wanting to die sincerely (not figuratively), or urgently wanting to take harmful action against themselves.
-- "moderate": User is showing serious over-reliance on this AI as their only support, actively refusing all other help, or their emotional state has rapidly worsened in this conversation. Also use "moderate" if the user is trying to dismiss or bypass a prior crisis response (e.g. "I was just testing", "ignore that, let's continue the sketch") — the prior distress should still be taken seriously.
-- "none": Normal emotional expression for art journaling, figurative speech ("dying of laughter", "this is killing me", "I could kill myself for forgetting"), or no distress signals.`;
+- "crisis": User appears to be in genuine emotional crisis. This includes direct statements (self-harm, suicidal ideation, wanting to die) AND indirect signals such as: saying goodbye to everyone, giving things away, stating they won't be around, describing a "plan", expressing that everything is settled or finished in a final-sounding way. When in doubt between "moderate" and "crisis", choose "crisis".
+- "moderate": User is showing significant distress without clear crisis signals — over-reliance on this AI as their only support, refusing all other help, rapidly worsening mood, or trying to dismiss/bypass a prior crisis response (e.g. "I was just testing", "ignore that").
+- "none": Normal emotional expression for art journaling, figurative speech ("dying of laughter", "this is killing me", "I could kill myself for forgetting"), or no distress signals.
+
+Examples of indirect crisis signals that should be classified as "crisis":
+- "I said goodbye to everyone today" (no context suggesting a normal life event)
+- "I won't be needing this anymore"
+- "I just wanted to make one last sketch"
+- "I've sorted everything out finally"
+- "nobody will have to worry about me soon"
+
+Examples that mention goodbyes or endings but are NOT crisis — classify as "none":
+- "I'm going through a transition and said my goodbyes" (explicitly framed as a life transition)
+- "I said goodbye to my old job / city / relationship today"
+- "this chapter of my life is ending"
+- "I'm moving on and leaving things behind"
+- "I want to sketch the feeling of an ending or goodbye"
+The key distinction: crisis signals are final and self-directed with no life-event context. Normal goodbyes reference a specific situation (job, place, relationship, phase of life).`;
 
 async function classifyDistress(history: Message[], currentText: string): Promise<DistressLevel> {
   try {
@@ -1267,23 +1286,25 @@ ${lastCode}
         return true;
       };
 
-      if (turnCount === 0) {
+      // When distress is active on any turn, skip all spec/generation calls
+      // and respond conversationally only. This prevents VISUAL_SPEC_PROMPT
+      // from receiving a session that has prior crisis context and returning
+      // a safety refusal instead of JSON.
+      if (msgDistress !== "none" || sessionHasCrisisRef.current) {
+        const safetyResult = await callAnthropicChat("", safeIntake, [...history, userMessage], sid);
+        if (handleServerSafetyBlock(safetyResult)) return;
+        reply = safetyResult.text;
+        replyStopReason = safetyResult.stopReason ?? null;
+      } else if (turnCount === 0) {
         setSketchGenerating(true);
         try {
           const newHistory: Message[] = [...history, userMessage];
-
-          // Run intake questions AND spec generation in parallel
           const [intakeResult, specResult] = await Promise.all([
             callAnthropicChat("", safeIntake, newHistory, sid),
             callAnthropicChat("", safeSpec, newHistory, sid),
           ]);
-
-          if (handleServerSafetyBlock(intakeResult)) {
-            return;
-          }
+          if (handleServerSafetyBlock(intakeResult)) return;
           if (specResult.safetyBlocked) {
-            // Spec was blocked but intake was fine — still show intake reply,
-            // but skip code generation entirely.
             reply = intakeResult.text;
           } else {
             const parsedSpec = parseVisualSpec(specResult.text);
@@ -1291,22 +1312,13 @@ ${lastCode}
               setLastVisualSpec(parsedSpec);
               const generationHistory = buildGenerationMessages(history, text, parsedSpec);
               try {
-                const codeResult = await callAnthropicChat(
-                  "",
-                  safeGeneration,
-                  generationHistory,
-                  sid
-                );
+                const codeResult = await callAnthropicChat("", safeGeneration, generationHistory, sid);
                 if (!codeResult.safetyBlocked) {
                   const code = extractCode(codeResult.text);
                   if (code && looksLikeRunnableP5(code)) {
                     setSketchProgress(100);
                     setLastCode(code);
-                  } else
-                    console.warn(
-                      "Code extracted but failed p5 check:",
-                      codeResult.text.slice(0, 200)
-                    );
+                  } else console.warn("Code extracted but failed p5 check:", codeResult.text.slice(0, 200));
                 }
               } catch (err) {
                 console.error("Sketch generation failed:", err);
@@ -2178,20 +2190,6 @@ Important: update this existing sketch instead of replacing it from scratch.`,
               </div>
             )}
           </div>
-
-          <p
-            style={{
-              fontSize: 10,
-              color: "#8a7d6f",
-              marginTop: 10,
-              marginBottom: 0,
-              lineHeight: 1.4,
-            }}
-          >
-            Conversations stay in your browser (localStorage). Nothing is sent to
-            ad networks or third parties — only to Anthropic to generate your
-            sketch.
-          </p>
 
           <textarea
               id="fs-input"
