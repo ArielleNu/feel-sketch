@@ -316,7 +316,7 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    return res.json({ text });
+    return res.json({ text, stopReason: response.stop_reason ?? null });
   } catch (err) {
     console.error("Error in /api/chat:", err);
     return res.status(500).json({ error: "Internal server error." });
