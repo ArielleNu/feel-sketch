@@ -1220,10 +1220,30 @@ ${lastCode}
         return;
       }
 
+      // Auto-enter grounding mode if distress is moderate, or if we've had 3+
+      // consecutive distress turns. The CSV mitigation for harm #1 (reflection
+      // spiral) requires stopping probing questions at this threshold, not just
+      // softening the prompt context.
+      const autoGround =
+        !groundingMode &&
+        (msgDistress === "moderate" || newConsecutiveTurns >= 3);
+      if (autoGround) {
+        setGroundingMode(true);
+        setHistory((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content:
+              "I'm noticing this conversation has been touching on heavy feelings for a few turns. I'm going to stop asking probing questions and shift to something gentler. We can keep working on a calmer sketch, take a pause, or come back later — whatever feels best.\n\nIf any of this feels heavy, real human support is available: **988 Suicide & Crisis Lifeline** (call or text 988), **Crisis Text Line** (text HOME to 741741).",
+          },
+        ]);
+      }
+      const inGrounding = groundingMode || autoGround;
+
       let reply: string;
       let replyStopReason: string | null = null;
-      const intakeBase = groundingMode ? GROUNDING_PROMPT : INTAKE_PROMPT;
-      const refinementBase = groundingMode ? GROUNDING_PROMPT : REFINEMENT_PROMPT;
+      const intakeBase = inGrounding ? GROUNDING_PROMPT : INTAKE_PROMPT;
+      const refinementBase = inGrounding ? GROUNDING_PROMPT : REFINEMENT_PROMPT;
       const safeIntake = withSafetyContext(intakeBase, sessionHasCrisisRef.current, msgDistress);
       const safeSpec = withSafetyContext(VISUAL_SPEC_PROMPT, sessionHasCrisisRef.current, msgDistress);
       const safeGeneration = withSafetyContext(GENERATION_PROMPT, sessionHasCrisisRef.current, msgDistress);
