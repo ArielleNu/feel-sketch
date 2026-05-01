@@ -1328,7 +1328,21 @@ ${lastCode}
         const parsedSpec = parseVisualSpec(specResult.text);
 
         if (!parsedSpec) {
-          throw new Error("Could not parse VisualSpec JSON from model output.");
+          // The model declined to produce a VisualSpec — usually because the
+          // conversation moved into a safety/clarification context (e.g. the
+          // model is asking the user a sensitive follow-up question rather than
+          // generating art). Surface a clear user-facing message instead of a
+          // cryptic parse error, and stop here so they can start a new chat.
+          setHistory((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content:
+                "I can't generate a sketch from this prompt. This often happens when the conversation has moved into a sensitive area that this art tool isn't the right fit for.\n\nPlease click **+ New Chat** in the sidebar and try a different feeling or mood — for example, a weather, a memory, an atmosphere, or an emotional state you'd like to visualize.",
+            },
+          ]);
+          setTurnCount((prev) => prev + 1);
+          return;
         }
 
         setLastVisualSpec(parsedSpec);
