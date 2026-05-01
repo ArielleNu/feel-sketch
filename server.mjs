@@ -291,7 +291,7 @@ app.post("/api/chat", async (req, res) => {
 
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 64000,
+      max_tokens: 8096,
       system: hardenedSystem,
       messages: wrappedMessages,
     });

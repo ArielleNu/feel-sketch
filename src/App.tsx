@@ -41,14 +41,7 @@ interface ChatSession {
   turnCount: number;
 }
 
-type UncertaintyLevel = "low" | "medium" | "high";
 type DistressLevel = "none" | "moderate" | "crisis";
-
-interface UncertaintySignal {
-  level: UncertaintyLevel;
-  title: string;
-  message: string;
-}
 
 const SESSIONS_KEY = "feel-sketch-sessions";
 
@@ -504,81 +497,6 @@ function formatAssistantMarkdownToHtml(text: string): string {
   return rendered.join("");
 }
 
-function detectUncertaintySignals(
-  text: string,
-  turnCount: number,
-  hasExistingCode: boolean
-): UncertaintySignal[] {
-  const trimmed = text.trim();
-  const lowered = trimmed.toLowerCase();
-  const signals: UncertaintySignal[] = [];
-
-  if (trimmed.length > 340) {
-    signals.push({
-      level: "medium",
-      title: "Long prompt",
-      message:
-        "Long descriptions can make the first result less focused. Start broad, then refine in small steps.",
-    });
-  }
-
-  if (
-    /(photoreal|realistic|portrait|face|character|exactly|identical|copy|logo|text on image)/i.test(
-      lowered
-    )
-  ) {
-    signals.push({
-      level: "high",
-      title: "Style mismatch risk",
-      message:
-        "This request may conflict with the app's abstract style and can produce unexpected outputs.",
-    });
-  }
-
-  if (
-    /(complex|many|everything|all at once|and also|plus|multiple scenes|detailed story)/i.test(
-      lowered
-    )
-  ) {
-    signals.push({
-      level: "medium",
-      title: "High complexity",
-      message:
-        "Packed prompts are more error-prone. Try one core mood first, then add details iteratively.",
-    });
-  }
-
-  if (
-    /(bug|break|invalid|error|undefined|null|crash|throw|fail|broken code)/i.test(
-      lowered
-    )
-  ) {
-    signals.push({
-      level: "high",
-      title: "Code instability risk",
-      message:
-        "Requests involving broken behavior are likely to generate code that needs manual fixes.",
-    });
-  }
-
-  if (turnCount >= 2 && hasExistingCode && trimmed.length > 220) {
-    signals.push({
-      level: "medium",
-      title: "Refinement drift risk",
-      message:
-        "Large refinement requests can overwrite working parts. Smaller edits are usually more reliable.",
-    });
-  }
-
-  return signals;
-}
-
-function highestSignalLevel(signals: UncertaintySignal[]): UncertaintyLevel {
-  if (signals.some((s) => s.level === "high")) return "high";
-  if (signals.some((s) => s.level === "medium")) return "medium";
-  return "low";
-}
-
 function detectJailbreakAttempt(text: string): boolean {
   const patterns = [
     /ignore\s+(previous|prior|your|all|safety|these)\s+(instructions?|guidelines?|rules?|constraints?|prompts?)/i,
@@ -690,10 +608,25 @@ async function classifyDistress(history: Message[], currentText: string): Promis
     ];
     const result = await callAnthropicChat("", CLASSIFIER_SYSTEM_PROMPT, classifyMessages);
     const jsonStr = extractJsonObject(result.text);
-    if (!jsonStr) return "none";
-    const parsed = JSON.parse(jsonStr) as { level?: string };
-    if (parsed.level === "crisis") return "crisis";
-    if (parsed.level === "moderate") return "moderate";
+    if (jsonStr) {
+      const parsed = JSON.parse(jsonStr) as { level?: string };
+      if (parsed.level === "crisis") return "crisis";
+      if (parsed.level === "moderate") return "moderate";
+      return "none";
+    }
+    // No JSON — the server's safety preamble likely fired and Claude responded
+    // with a natural-language safety message instead of the expected JSON.
+    // Treat this as a crisis signal rather than silently returning "none".
+    const lower = result.text.toLowerCase();
+    if (
+      lower.includes("988") ||
+      lower.includes("crisis text line") ||
+      lower.includes("self-harm") ||
+      lower.includes("not equipped") ||
+      lower.includes("crisis support")
+    ) {
+      return "crisis";
+    }
   } catch {}
   return "none";
 }
@@ -797,12 +730,10 @@ export const App: React.FC = () => {
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions());
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [activeUncertaintySignals, setActiveUncertaintySignals] = useState<
-    UncertaintySignal[]
-  >([]);
-  const [stageWarning, setStageWarning] = useState<string | null>(null);
   const [distressLevel, setDistressLevel] = useState<DistressLevel>("none");
   const [consecutiveDistressTurns, setConsecutiveDistressTurns] = useState(0);
+  const [crisisLocked, setCrisisLocked] = useState(false);
+  const crisisResponseCountRef = useRef(0);
   const [groundingMode, setGroundingMode] = useState(false);
   const [showCrossSessionBanner, setShowCrossSessionBanner] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
@@ -1200,7 +1131,7 @@ ${lastCode
 
   const handleSend = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || loading || sessionEnded) return;
+    if (!text || loading || sessionEnded || crisisLocked) return;
     suppressAutosaveUntilNextPromptRef.current = false;
     setTruncatedReply(false);
 
@@ -1214,9 +1145,7 @@ ${lastCode
     }
     setLoadingSessionId(requestSessionId);
 
-    const promptSignals = detectUncertaintySignals(text, turnCount, !!lastCode);
-    setActiveUncertaintySignals(promptSignals);
-    setStageWarning(null);
+
 
     if (overrideText === undefined) setInput("");
     setError(null);
@@ -1276,6 +1205,10 @@ ${lastCode}
       if (msgDistress === "crisis") {
         sessionHasCrisisRef.current = true;
         setGroundingMode(true);
+        crisisResponseCountRef.current += 1;
+        if (crisisResponseCountRef.current >= 2) {
+          setCrisisLocked(true);
+        }
         setHistory((prev) => [
           ...prev,
           {
@@ -1315,9 +1248,6 @@ ${lastCode}
       };
 
       if (turnCount === 0) {
-        setStageWarning(
-          "Early-stage interpretation can be noisy. The first sketch may miss intent and need one or two refinements."
-        );
         setSketchGenerating(true);
         try {
           const newHistory: Message[] = [...history, userMessage];
@@ -1369,9 +1299,6 @@ ${lastCode}
           setSketchGenerating(false);
         }
       } else if (turnCount === 1) {
-        setStageWarning(
-          "This is the first full sketch generation pass. If output feels off, request one focused change at a time."
-        );
         const specHistory: Message[] = [...history, userMessage];
 
         const specResult = await callAnthropicChat("", safeSpec, specHistory, sid);
@@ -1405,9 +1332,6 @@ ${lastCode}
           setSketchGenerating(false);
         }
       } else {
-        setStageWarning(
-          "Refinements can occasionally regress earlier effects. If that happens, ask to keep specific working parts."
-        );
         const refinementHistory: Message[] = [
           ...history,
           {
@@ -1471,7 +1395,7 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     } finally {
       setLoading(false);
       setLoadingSessionId(null);
-      setStageWarning(null);
+
       setTimeout(scrollToBottom, 0);
     }
   }, [consecutiveDistressTurns, groundingMode, history, input, lastCode, lastVisualSpec, loading, scrollToBottom, sessionEnded, turnCount]);
@@ -1489,8 +1413,8 @@ Important: update this existing sketch instead of replacing it from scratch.`,
   const handleFeelWorse = useCallback(() => {
     if (groundingMode) return;
     setGroundingMode(true);
-    setActiveUncertaintySignals([]);
-    setStageWarning(null);
+
+
     setHistory((prev) => [
       ...prev,
       {
@@ -1513,10 +1437,12 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setLastVisualSpec(null);
     setError(null);
     setInput("");
-    setActiveUncertaintySignals([]);
-    setStageWarning(null);
+
+
     setDistressLevel("none");
     setConsecutiveDistressTurns(0);
+    setCrisisLocked(false);
+    crisisResponseCountRef.current = 0;
     setGroundingMode(false);
     setSessionEnded(false);
     sessionHasCrisisRef.current = false;
@@ -1546,10 +1472,12 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     setLastVisualSpec(session.lastVisualSpec);
     setError(null);
     setInput("");
-    setActiveUncertaintySignals([]);
-    setStageWarning(null);
+
+
     setDistressLevel("none");
     setConsecutiveDistressTurns(0);
+    setCrisisLocked(false);
+    crisisResponseCountRef.current = 0;
     setGroundingMode(false);
     setSessionEnded(false);
     sessionHasCrisisRef.current = false;
@@ -1585,14 +1513,6 @@ Important: update this existing sketch instead of replacing it from scratch.`,
     [history]
   );
 
-  const liveInputSignals = useMemo(
-    () => detectUncertaintySignals(input, turnCount, !!lastCode),
-    [input, turnCount, lastCode]
-  );
-  const combinedSignals = activeUncertaintySignals.length > 0
-    ? activeUncertaintySignals
-    : liveInputSignals;
-  const uncertaintyLevel = highestSignalLevel(combinedSignals);
   const showLoadingForCurrentSession =
     loading && !!currentSessionId && currentSessionId === loadingSessionId;
 
@@ -2056,7 +1976,54 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             </div>
           )}
 
-          {sessionEnded && (
+          {crisisLocked && (
+            <div
+              style={{
+                marginBottom: 8,
+                borderRadius: 8,
+                padding: "12px 14px",
+                fontSize: 13,
+                lineHeight: 1.6,
+                background: "#eef3ff",
+                border: "1px solid rgba(100, 120, 200, 0.4)",
+                color: "#2a2a5a",
+              }}
+            >
+              <div style={{ marginBottom: 6 }}>
+                It sounds like you&apos;re going through something really painful right now,
+                and that matters. This app isn&apos;t able to give you the kind of support
+                you deserve — but real help is available, and you don&apos;t have to face
+                this alone.
+              </div>
+              <div style={{ marginBottom: 10, fontWeight: 600 }}>
+                Please reach out — someone is ready to listen:
+              </div>
+              <div style={{ marginBottom: 4 }}>
+                <b>988 Suicide &amp; Crisis Lifeline</b> — call or text <b>988</b>
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <b>Crisis Text Line</b> — text <b>HOME</b> to <b>741741</b>
+              </div>
+              <button
+                type="button"
+                onClick={handleNewStory}
+                style={{
+                  background: "#b8956e",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "8px 18px",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                Start a new chat
+              </button>
+            </div>
+          )}
+
+          {sessionEnded && !crisisLocked && (
             <div
               style={{
                 marginBottom: 8,
@@ -2116,56 +2083,6 @@ Important: update this existing sketch instead of replacing it from scratch.`,
             </div>
           )}
 
-          {(combinedSignals.length > 0 || stageWarning) && (
-            <div
-              style={{
-                marginBottom: 8,
-                borderRadius: 8,
-                padding: "8px 10px",
-                fontSize: 12,
-                lineHeight: 1.4,
-                background:
-                  uncertaintyLevel === "high"
-                    ? "#4a171b"
-                    : uncertaintyLevel === "medium"
-                      ? "#fff4df"
-                      : "#eef7ff",
-                border:
-                  uncertaintyLevel === "high"
-                    ? "1px solid #8a2d34"
-                    : uncertaintyLevel === "medium"
-                      ? "1px solid rgba(190, 135, 50, 0.45)"
-                      : "1px solid rgba(90, 130, 170, 0.45)",
-                color:
-                  uncertaintyLevel === "high"
-                    ? "#ffd6dc"
-                    : uncertaintyLevel === "medium"
-                      ? "#6c4a16"
-                      : "#2d5678",
-              }}
-            >
-              <b>Uncertainty cue:</b>{" "}
-              {uncertaintyLevel === "high"
-                ? "high chance of unexpected results."
-                : uncertaintyLevel === "medium"
-                  ? "some risk of unexpected results."
-                  : "low risk right now."}
-              {combinedSignals.length > 0 && (
-                <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
-                  {combinedSignals.map((signal, idx) => (
-                    <li key={`${signal.title}-${idx}`}>
-                      <b>{signal.title}:</b> {signal.message}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {stageWarning && (
-                <div style={{ marginTop: 6 }}>
-                  <b>Current step:</b> {stageWarning}
-                </div>
-              )}
-            </div>
-          )}
 
           <div
               id="fs-chat"
